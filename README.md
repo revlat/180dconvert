@@ -79,6 +79,23 @@ im Terminal / Konsolenfenster), fragt es direkt in der Konsole nach den Ordnern:
    `180D-EKG-Export`).
 3. Umwandeln, „Fertig", mit **Enter** schließen.
 
+**So sieht die Abfrage aus** (Beispiel, Gerät wurde automatisch gefunden):
+
+```
+Gefundener Datenträger: E:\
+Diesen verwenden? [J/n] (leer = ja):                     <- einfach Enter
+
+Wohin sollen die Ergebnisse (EDF/CSV)?
+  Zielordner (leer = C:\Users\Du\Desktop\180D-EKG-Export):  <- Enter oder Pfad
+```
+
+Wird das Gerät **nicht** automatisch gefunden, kommt stattdessen diese Zeile –
+hier den Ordner (oder das Laufwerk) eintippen bzw. hineinziehen, dann Enter:
+
+```
+Pfad:  E:\
+```
+
 > Bewusst per Text-Eingabe statt Klick-Dialog – das funktioniert im Windows-
 > Konsolenfenster wie im Linux-Terminal zuverlässig und kann nicht „hängen".
 
