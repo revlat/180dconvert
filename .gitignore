@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Ausgaben / Exporte
+180D-Export/
+output/
+*.edf
+*.csv
+*.png
+
+# Rohdaten (medizinische Daten – NICHT committen!)
+ECG_*/
+*.SCP
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

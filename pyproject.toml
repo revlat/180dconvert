@@ -1,0 +1,12 @@
+[project]
+name = "healforce180dconvert"
+version = "1.0.0"
+description = "Konvertiert Heal Force Prince 180D SCP-ECG Rohdaten nach EDF+ und CSV"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy>=1.24",
+    "edfio>=0.4",
+    "matplotlib>=3.6",   # optional (nur für den Kontroll-Plot)
+]
