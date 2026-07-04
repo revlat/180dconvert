@@ -8,6 +8,9 @@ in offene Standardformate:
 - **CSV** – Rohwerte in mV je Ableitung
 - **PNG** – Kontroll-Plot im EKG-Raster (optional, falls `matplotlib` installiert)
 
+Zusätzlich gibt es eine **grafische Version** (Browser-App) zum Ansehen der Kurve
+und für eine technische Analyse – siehe [unten](#grafische-version-viewer--analyse--empfohlen).
+
 Läuft unter **Windows und Linux**. Reines Python – nichts muss als Paket
 installiert werden, nur ein paar Bibliotheken (siehe unten).
 
@@ -24,11 +27,41 @@ aber vom Standard EN 1064 ab (u. a. 10-Bit-Samples, interleaved Kanäle) – des
 
 ---
 
-# Schnellstart (per Doppelklick)
+# Grafische Version (Viewer + Analyse) — empfohlen
 
-Der bequemste Weg – ganz ohne Kommandozeile. Beim ersten Mal dauert es etwa
-10 Minuten, weil Python einmalig installiert werden muss; danach genügt ein
-Doppelklick.
+Am komfortabelsten ist die lokale **Web-App** (läuft im Browser, Windows & Linux).
+Sie bietet:
+
+- **EKG scrollbar ansehen** (3 Ableitungen mit QRS-Markern, Zeit-Slider, Sprung
+  zu jeder Auffälligkeit)
+- **Technische Analyse**: Herzfrequenz-Verlauf über die ganze Nacht,
+  HRV-Kennzahlen (SDNN/RMSSD/pNN50), Statistik je Stunde und eine anspringbare
+  Liste von **Auffälligkeiten** – Pausen, Brady-/Tachykardie-Phasen,
+  Extrasystolen (vorzeitige Schläge), unregelmäßiger Rhythmus (Verdacht),
+  geräteseitig markierte Schläge sowie Signalqualitäts-/Artefakt-Abschnitte
+- **Direkt-Download** von EDF+, CSV und einem **mehrseitigen PDF-Bericht**
+  (mit Grafiken: HF-Verlauf, Stunden-Statistik, Poincaré, RR-Histogramm,
+  Ereignis-Zeitleiste) – direkt aus dem Browser
+
+**Starten:**
+- **Windows:** Doppelklick auf **`Start_GUI_Windows.bat`**
+- **Linux/macOS:** `bash Start_GUI_Linux.sh`
+- manuell: `pip install streamlit plotly numpy edfio matplotlib` und dann
+  `streamlit run app.py`
+
+Der Starter richtet beim ersten Mal automatisch eine lokale Umgebung ein und
+öffnet die App im Browser. Dort den Pfad des Datenträgers eingeben (oder
+„automatisch suchen") → **Laden** → Tabs *EKG ansehen / Analyse / Export*.
+
+> ⚠️ Auch hier: technische Hinweise zur Durchsicht, **keine Diagnose**.
+
+---
+
+# Nur konvertieren (Schnellstart, ohne grafische Ansicht)
+
+Wenn du **bloß die EDF/CSV-Dateien** brauchst – ganz ohne Kommandozeile. Beim
+ersten Mal dauert es etwa 10 Minuten (einmalige Python-Installation), danach
+genügt ein Doppelklick.
 
 ## Windows
 
@@ -156,19 +189,35 @@ Vergleich mit einem Geräte-Ausdruck).
 
 | Datei | Zweck |
 |-------|-------|
-| `180dconvert.py` | Das Hauptprogramm (Dekodieren, Zusammenfügen, Export) |
+| `app.py` | **Grafische Version** (Streamlit-Web-App: Viewer + Analyse) |
+| `hf180d.py` | Kernlogik: Dekodieren, Zusammenfügen, Export, Analyse |
+| `180dconvert.py` | Kommandozeilen-Konverter (nutzt `hf180d`) |
 | `healforcescpecg.py` | SCP-ECG-Decoder für das Gerät (vendoriert, MIT) |
-| `Start_Windows.bat` / `Start_Linux.sh` | Doppelklick-Starter (Pakete + Start) |
+| `Start_GUI_Windows.bat` / `Start_GUI_Linux.sh` | Starter der grafischen Version |
+| `Start_Windows.bat` / `Start_Linux.sh` | Starter des reinen Konverters |
 | `docs/format-analysis.md` | Technische Analyse des Dateiformats |
 | `LICENSE` / `NOTICE` | Lizenz (MIT) und Attribution des Decoders |
 | `pyproject.toml` | Abhängigkeiten / Projekt-Metadaten |
 
-## Credits
+## Credits & verwendete Bibliotheken
 
+**Mitgeliefert (vendoriert, im Repo enthalten):**
 - SCP-ECG-Wellenform-Decoder: **Kaibin Bao**,
   [KaibinBao/healforcescpecg](https://github.com/KaibinBao/healforcescpecg)
-  (MIT), hier als `healforcescpecg.py` mit kleinem numpy≥2.0-Patch. Siehe
+  (MIT), als `healforcescpecg.py` mit kleinem numpy≥2.0-Patch. Lizenz-Volltext in
   [`NOTICE`](NOTICE).
+
+**Laufzeit-Abhängigkeiten** (per `pip` installiert, nicht im Repo enthalten):
+
+| Paket | Zweck | Lizenz |
+|-------|-------|--------|
+| numpy | Arrays / Berechnung | BSD-3-Clause |
+| edfio | EDF+-Export | Apache-2.0 |
+| matplotlib | Kontroll-Plot / PDF-Bericht | Matplotlib-Lizenz (BSD-artig) |
+| streamlit | Web-Oberfläche (`app.py`) | Apache-2.0 |
+| plotly | interaktive Diagramme (`app.py`) | MIT |
+
+Alle Lizenzen sind permissiv und mit der MIT-Lizenz dieses Projekts vereinbar.
 
 ## Lizenz
 
