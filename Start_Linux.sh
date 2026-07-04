@@ -9,7 +9,7 @@ cd "$(dirname "$0")" || exit 1
 if ! command -v python3 >/dev/null 2>&1; then
     echo "Python 3 ist nicht installiert. Bitte zuerst installieren."
     echo "  z. B.:  sudo zypper install python3   (openSUSE)"
-    echo "          sudo apt install python3 python3-pip python3-tk   (Debian/Ubuntu)"
+    echo "          sudo apt install python3 python3-pip   (Debian/Ubuntu)"
     read -r -p "Enter zum Schliessen ... " _
     exit 1
 fi
