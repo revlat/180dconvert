@@ -336,18 +336,30 @@ def _auto_find_input() -> str | None:
     return None
 
 
-def _ask_directory(title: str) -> str | None:
-    """Ordner-Auswahldialog (tkinter); None wenn nicht verfügbar/abgebrochen."""
+def _choose_directory(title: str, prompt: str) -> str | None:
+    """Ordner wählen: erst grafischer Dialog, sonst Texteingabe im Terminal.
+
+    Rückgabe: gewählter Pfad, oder None (Dialog abgebrochen bzw. leer).
+    Fällt nur dann auf Texteingabe zurück, wenn KEIN Fenster möglich ist
+    (kein tkinter / kein Display) – nicht beim bewussten Abbrechen.
+    """
     try:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
+        root.attributes("-topmost", True)      # Dialog in den Vordergrund holen
+        root.update()
         path = filedialog.askdirectory(title=title)
         root.destroy()
         return path or None
     except Exception:
-        return None
+        # Kein grafisches Fenster möglich -> im Terminal nach dem Pfad fragen
+        try:
+            p = input(prompt).strip().strip('"').strip("'")
+            return p or None
+        except (EOFError, KeyboardInterrupt):
+            return None
 
 
 def _default_output_dir() -> str:
@@ -377,15 +389,23 @@ def run_interactive() -> int:
         except (EOFError, KeyboardInterrupt):
             pass
     if not base:
-        print("\nBitte den Ordner des Datenträgers wählen (mit ECG_0 und README.TXT) …")
-        picked = _ask_directory("Datenträger wählen (Ordner mit ECG_0)")
+        print("\nJetzt den Ordner des Datenträgers wählen (enthält ECG_0 und README.TXT).")
+        print("  -> Es öffnet sich ein Auswahlfenster (erscheint evtl. hinter diesem Fenster).")
+        picked = _choose_directory(
+            "Datenträger wählen (Ordner mit ECG_0)",
+            "Pfad zum Datenträger-Ordner eingeben (oder Laufwerk, z. B. E:\\): ")
         base = resolve_input(picked) if picked else None
     if not base:
-        print("\nFEHLER: Kein gültiger Datenträger gewählt.")
+        print("\nFEHLER: Kein gültiger Datenträger gewählt "
+              "(es muss der Ordner mit ECG_0 und README.TXT sein).")
         _pause()
         return 2
 
-    out = _ask_directory("Zielordner wählen (Abbrechen = Desktop)") or _default_output_dir()
+    print("\nJetzt den Zielordner wählen (wo die EDF/CSV gespeichert werden).")
+    print("  -> Auswahlfenster; Abbrechen = Desktop-Ordner '180D-EKG-Export'.")
+    out = _choose_directory(
+        "Zielordner wählen (Abbrechen = Desktop)",
+        f"Zielordner eingeben (leer = {_default_output_dir()}): ") or _default_output_dir()
     try:
         rc = convert(base, out)
     except Exception as e:  # noqa: BLE001 – Laien eine lesbare Meldung zeigen
