@@ -20,9 +20,9 @@ if not exist ".venv\" (
     if errorlevel 1 ( echo FEHLER: .venv konnte nicht angelegt werden. & pause & exit /b 1 )
 )
 
-echo Pruefe / installiere Pakete ^(numpy, edfio, matplotlib, streamlit, plotly^) ...
+echo Pruefe / installiere Pakete ^(numpy, edfio, matplotlib, streamlit, plotly, neurokit2^) ...
 ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-".venv\Scripts\python.exe" -m pip install --quiet numpy edfio matplotlib streamlit plotly
+".venv\Scripts\python.exe" -m pip install --quiet numpy edfio matplotlib streamlit plotly neurokit2
 if errorlevel 1 ( echo FEHLER: Pakete konnten nicht installiert werden. & pause & exit /b 1 )
 
 REM Erststart-Abfragen (E-Mail / Telemetrie) ueberspringen

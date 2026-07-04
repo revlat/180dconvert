@@ -60,10 +60,15 @@ def load_source(base: str) -> None:
         def cb(i, n, ri=ri, rec=rec, nrec=len(dev.records)):
             prog.progress((ri + i / n) / nrec, f"Aufnahme {rec.index}: {i}/{n} Segmente")
         dec = h.decode_record(base, rec, progress=cb)
+        if h.HAS_NEUROKIT:
+            prog.progress((ri + 1) / len(dev.records),
+                          f"Aufnahme {rec.index}: erweiterte Analyse (NeuroKit2) …")
+        nk = h.neurokit_analysis(dec)
         recs[rec.index] = dec
         ana[rec.index] = {
+            "nk": nk,
             "hrv": h.hrv_metrics(dec),
-            "events": h.detect_events(dec),
+            "events": h.detect_events(dec, nk=nk),   # nutzt NeuroKit-R-Zacken falls vorhanden
             "trend": h.hr_trend(dec, bin_s=30),
             "hourly": h.hourly_stats(dec),
         }
@@ -154,7 +159,12 @@ with tab_view:
                       row=r + 1, col=1)
         fig.update_yaxes(title_text="mV", row=r + 1, col=1, zeroline=True,
                          gridcolor="rgba(255,0,0,0.2)")
-    beats = np.flatnonzero(dec.qrs[i0:i1]) + i0
+    nkinfo = ana.get("nk")
+    if nkinfo and nkinfo.get("rpeaks") is not None:
+        rp = np.asarray(nkinfo["rpeaks"])
+        beats = rp[(rp >= i0) & (rp < i1)]
+    else:
+        beats = np.flatnonzero(dec.qrs[i0:i1]) + i0
     if len(beats):
         fig.add_trace(go.Scatter(x=beats / fs, y=dec.samples[beats, 1] * h.MV_PER_UNIT,
                                  mode="markers", marker=dict(color="red", size=6),
@@ -182,6 +192,29 @@ with tab_ana:
         cc[1].metric("SDNN", f"{m['sdnn_ms']:.0f} ms")
         cc[2].metric("RMSSD", f"{m['rmssd_ms']:.0f} ms")
         cc[3].metric("pNN50", f"{m['pnn50_pct']:.1f} %")
+
+    st.subheader("Erweiterte Analyse (NeuroKit2)")
+    nk = ana.get("nk")
+    if nk:
+        qcols = st.columns(4)
+        qcols[0].metric("R-Zacken (NeuroKit2)", f"{nk.get('n_rpeaks', '?')}")
+        if nk.get("quality_mean") is not None:
+            qcols[1].metric("Signalqualität Ø", f"{nk['quality_mean']:.2f}")
+            qcols[2].metric("niedrige Qualität", f"{nk.get('quality_low_pct', 0):.0f} %")
+        hv = nk.get("hrv", {})
+        order = [("MeanNN", "ms"), ("SDNN", "ms"), ("RMSSD", "ms"), ("pNN50", "%"),
+                 ("SD1", "ms"), ("SD2", "ms"), ("LFHF", "")]
+        st.dataframe(
+            [{"Kennzahl": ("LF/HF" if k == "LFHF" else k),
+              "Wert": (f"{hv[k]:.1f} {u}".strip() if isinstance(hv.get(k), (int, float)) else "–")}
+             for k, u in order],
+            hide_index=True, width="stretch")
+        st.caption("Robuste R-Zacken-Erkennung, Signalqualität und erweiterte HRV "
+                   "(inkl. Frequenz-/Poincaré-Maße) via NeuroKit2 – technisch, keine Diagnose.")
+    else:
+        st.info("**NeuroKit2 ist nicht installiert** – es läuft die numpy-Basisanalyse. "
+                "Für die erweiterte Analyse (robustere R-Zacken, Signalqualität, reichere HRV): "
+                "`pip install neurokit2` – oder den GUI-Starter erneut ausführen.")
 
     st.subheader("Auffälligkeiten (Hinweise zur Durchsicht – keine Diagnose)")
     ev = ana["events"]
@@ -213,7 +246,7 @@ with tab_export:
             ss[f"dl_{idx}"] = {
                 "edf": h.edf_bytes(dec, dev),
                 "csv": h.csv_bytes(dec),
-                "pdf": h.build_report_pdf(dec, dev),
+                "pdf": h.build_report_pdf(dec, dev, nk=ana.get("nk")),
             }
     dl = ss.get(f"dl_{idx}")
     if dl:

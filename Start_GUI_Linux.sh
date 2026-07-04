@@ -18,9 +18,9 @@ if [ ! -d ".venv" ]; then
         read -r -p "Enter ... " _; exit 1; }
 fi
 
-echo "Pruefe / installiere Pakete (numpy, edfio, matplotlib, streamlit, plotly) ..."
+echo "Pruefe / installiere Pakete (numpy, edfio, matplotlib, streamlit, plotly, neurokit2) ..."
 ./.venv/bin/python -m pip install --quiet --upgrade pip
-if ! ./.venv/bin/python -m pip install --quiet numpy edfio matplotlib streamlit plotly; then
+if ! ./.venv/bin/python -m pip install --quiet numpy edfio matplotlib streamlit plotly neurokit2; then
     echo "FEHLER: Pakete konnten nicht installiert werden (Internet vorhanden?)."
     read -r -p "Enter zum Schliessen ... " _
     exit 1

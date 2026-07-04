@@ -32,13 +32,30 @@ aber vom Standard EN 1064 ab (u. a. 10-Bit-Samples, interleaved Kanäle) – des
 Am komfortabelsten ist die lokale **Web-App** (läuft im Browser, Windows & Linux).
 Sie bietet:
 
-- **EKG scrollbar ansehen** (3 Ableitungen mit QRS-Markern, Zeit-Slider, Sprung
-  zu jeder Auffälligkeit)
+- **EKG scrollbar ansehen** (3 Ableitungen; die roten QRS-Marker sitzen – mit
+  NeuroKit2 – exakt auf der R-Zacke, Zeit-Slider, Sprung zu jeder Auffälligkeit)
 - **Technische Analyse**: Herzfrequenz-Verlauf über die ganze Nacht,
   HRV-Kennzahlen (SDNN/RMSSD/pNN50), Statistik je Stunde und eine anspringbare
   Liste von **Auffälligkeiten** – Pausen, Brady-/Tachykardie-Phasen,
   Extrasystolen (vorzeitige Schläge), unregelmäßiger Rhythmus (Verdacht),
   geräteseitig markierte Schläge sowie Signalqualitäts-/Artefakt-Abschnitte
+- **Erweiterte Analyse via NeuroKit2** (standardmäßig aktiv – der GUI-Starter
+  installiert es mit): Die **R-Zacken-/QRS-Erkennung läuft über NeuroKit2**.
+
+  Das **Gerät selbst** speichert nur grobe **Schlag-Markierungen** (die Info
+  „hier war ein Schlag", *nicht* die genaue Position der R-Spitze). Nutzt man
+  diese Geräte-Marker direkt, sitzen die roten Punkte deshalb **leicht neben**
+  der Spitze. NeuroKit2 bestimmt die R-Zacke stattdessen direkt aus der Kurve.
+  Dadurch:
+  - **QRS-Marker sitzen exakt auf der R-Zacke** (statt leicht daneben – das lag
+    an den ungenauen Geräte-Markierungen, nicht an der Verarbeitung),
+  - die **Auffälligkeits-Erkennung** ist genauer (**weniger Fehl-Extrasystolen**),
+  - **Signalqualität** wird bewertet: Ereignisse in schwachem Signal werden als
+    „unsicher" markiert, plus die Kategorie „Signalqualität niedrig",
+  - **reichere HRV** (Frequenz-/Poincaré-Maße: SD1/SD2, LF/HF).
+
+  Fehlt NeuroKit2, läuft automatisch die schlanke numpy-Basisanalyse auf Basis
+  der Geräte-Markierungen (dann liegen die QRS-Punkte wieder etwas ungenauer).
 - **Direkt-Download** von EDF+, CSV und einem **mehrseitigen PDF-Bericht**
   (mit Grafiken: HF-Verlauf, Stunden-Statistik, Poincaré, RR-Histogramm,
   Ereignis-Zeitleiste) – direkt aus dem Browser
@@ -216,6 +233,11 @@ Vergleich mit einem Geräte-Ausdruck).
 | matplotlib | Kontroll-Plot / PDF-Bericht | Matplotlib-Lizenz (BSD-artig) |
 | streamlit | Web-Oberfläche (`app.py`) | Apache-2.0 |
 | plotly | interaktive Diagramme (`app.py`) | MIT |
+| neurokit2 | erweiterte EKG-Analyse (**optional**) | MIT |
+
+`neurokit2` ist optional – ohne es läuft die numpy-Basisanalyse; installiert man
+es (GUI-Starter oder `pip install neurokit2`), zieht es zusätzlich
+scipy/pandas/scikit-learn nach.
 
 Alle Lizenzen sind permissiv und mit der MIT-Lizenz dieses Projekts vereinbar.
 

@@ -15,4 +15,5 @@ dependencies = [
 gui = [
     "streamlit>=1.30",   # grafische Version (app.py)
     "plotly>=5.0",
+    "neurokit2>=0.2",    # erweiterte Analyse (optional; zieht scipy/pandas/sklearn)
 ]

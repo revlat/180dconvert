@@ -11,6 +11,7 @@ keine Diagnose.
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import os
 import re
@@ -20,6 +21,10 @@ from datetime import datetime, timedelta
 import numpy as np
 
 from healforcescpecg import HealforceSCPECG
+
+# NeuroKit2 (optional): erweiterte Analyse. Nur Verfügbarkeit prüfen (kein Import,
+# der wäre langsam) – tatsächlich importiert wird erst bei Bedarf.
+HAS_NEUROKIT = importlib.util.find_spec("neurokit2") is not None
 
 # --- Feste Geräteparameter (verifiziert, siehe docs/format-analysis.md)
 SAMPLING_RATE = 150.0
@@ -375,6 +380,67 @@ def hr_trend(dec: DecodedRecord, bin_s: float = 30.0):
     return np.array(centers), np.array(means)
 
 
+def neurokit_analysis(dec: DecodedRecord) -> dict | None:
+    """Erweiterte Analyse mit NeuroKit2 (falls installiert): robuste R-Zacken,
+    reichere HRV (Zeit-/Frequenzdomäne, Poincaré SD1/SD2) und Signalqualität.
+
+    Gibt None zurück, wenn NeuroKit2 fehlt oder etwas schiefgeht (dann bleibt die
+    numpy-Basisanalyse aktiv). ⚠️ Technische Kennzahlen – KEINE Diagnose.
+    """
+    if not HAS_NEUROKIT:
+        return None
+    try:
+        import neurokit2 as nk
+        fs = SAMPLING_RATE
+        sig = dec.samples[:, 1].astype(float) * MV_PER_UNIT
+        cleaned = nk.ecg_clean(sig, sampling_rate=fs)
+        _, info = nk.ecg_peaks(cleaned, sampling_rate=fs)
+        rp = np.asarray(info["ECG_R_Peaks"])
+        out: dict = {"n_rpeaks": int(len(rp)), "method": "NeuroKit2", "rpeaks": rp}
+
+        def _g(df, name):
+            try:
+                v = float(df["HRV_" + name].iloc[0])
+                return None if np.isnan(v) else v
+            except Exception:
+                return None
+
+        try:
+            ht = nk.hrv_time(rp, sampling_rate=fs)
+            hfd = nk.hrv_frequency(rp, sampling_rate=fs)
+            rr = np.diff(rp) / fs
+            sd1 = sd2 = None
+            if len(rr) > 2:
+                sd1 = float(np.std(np.diff(rr), ddof=1) / np.sqrt(2) * 1000)
+                sd2 = float(np.sqrt(max(0.0, 2 * np.var(rr, ddof=1)
+                                       - 0.5 * np.var(np.diff(rr), ddof=1))) * 1000)
+            out["hrv"] = {"MeanNN": _g(ht, "MeanNN"), "SDNN": _g(ht, "SDNN"),
+                          "RMSSD": _g(ht, "RMSSD"), "pNN50": _g(ht, "pNN50"),
+                          "SD1": sd1, "SD2": sd2, "LFHF": _g(hfd, "LFHF")}
+        except Exception:
+            out["hrv"] = {}
+
+        try:  # Signalqualität als Zeitleiste (schnell: ~120 Stichproben à 8 s)
+            w = int(8 * fs)
+            n_win = min(120, max(1, len(cleaned) // w))
+            starts = np.linspace(0, max(1, len(cleaned) - w), n_win).astype(int)
+            qt, qv = [], []
+            for s in starts:
+                qt.append((s + w / 2) / fs)
+                qv.append(float(np.nanmean(nk.ecg_quality(cleaned[s:s + w], sampling_rate=fs))))
+            if qv:
+                qt, qv = np.asarray(qt), np.asarray(qv)
+                out["quality_t"] = qt
+                out["quality_v"] = qv
+                out["quality_mean"] = float(np.mean(qv))
+                out["quality_low_pct"] = float(np.mean(qv < 0.5) * 100)
+        except Exception:
+            pass
+        return out
+    except Exception:
+        return None
+
+
 def _clock(dec: DecodedRecord, sec: float) -> str:
     if dec.start is None:
         return f"{sec:.0f}s"
@@ -395,21 +461,41 @@ def event_counts(events: list[dict]) -> dict:
     return dict(Counter(e["typ"] for e in events))
 
 
-def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0) -> list[dict]:
+def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
+                  nk: dict | None = None) -> list[dict]:
     """Technische Auffälligkeiten als anspringbare Ereignisliste.
 
     Erkennt: Pausen, Bradykardie-/Tachykardie-Phasen, Extrasystolen (vorzeitige
     Schläge), unregelmäßigen Rhythmus (Verdacht), geräteseitig markierte Schläge
-    und Signalqualitäts-/Artefakt-Abschnitte.
+    und Signalqualitäts-Abschnitte.
+
+    Schlagquelle: wenn `nk` (NeuroKit2-Analyse) übergeben ist, werden dessen
+    robuste R-Zacken statt der Geräte-Marker verwendet; zusätzlich werden
+    Auffälligkeiten in signalschwachen Abschnitten als „unsicher" markiert.
 
     ⚠️ Rein technische Hinweise zur Durchsicht – KEINE Diagnose.
     """
     events: list[dict] = []
-    t, rr = rr_series(dec)
-    if len(rr) < 3:
+    # Schlagquelle: NeuroKit-R-Zacken bevorzugen, sonst Geräte-Marker
+    if nk and nk.get("rpeaks") is not None and len(nk["rpeaks"]) > 2:
+        idx = np.asarray(nk["rpeaks"])
+    else:
+        idx = beat_indices(dec)
+    if len(idx) < 3:
         return events
+    tt = idx / SAMPLING_RATE
+    rr = np.diff(tt)
+    t = tt[1:]                       # Zeitpunkt des jeweils 2. Schlags eines RR
     hr = np.where(rr > 0, 60.0 / rr, 0.0)
     med = _rolling_median(rr, 11)
+
+    qt = nk.get("quality_t") if nk else None
+    qv = nk.get("quality_v") if nk else None
+
+    def _low_quality(time_s: float) -> bool:
+        if qt is None or qv is None or len(qt) == 0:
+            return False
+        return float(np.interp(time_s, qt, qv)) < 0.5
 
     # 1) Pausen (langes RR)
     for ti, rri in zip(t[rr >= pause_s], rr[rr >= pause_s]):
@@ -469,20 +555,34 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0) -> l
             events.append({"typ": "Unregelmäßig (Gerät)", "zeit_s": float(g[0] / SAMPLING_RATE),
                            "wert": f"{len(g)} markierte Stelle(n)"})
 
-    # 6) Signalqualität / Artefakt: flache 2-s-Fenster (kein cardiales Signal)
-    sig = dec.samples[:, 1].astype(float)
-    win = int(2 * SAMPLING_RATE)
-    nb = len(sig) // win
-    if nb:
-        stds = sig[:nb * win].reshape(nb, win).std(axis=1)
-        bi = np.flatnonzero(stds < 3.0)      # < ~0,03 mV Streuung
-        if len(bi):
-            for g in np.split(bi, np.flatnonzero(np.diff(bi) > 1) + 1):
-                dur = len(g) * 2
-                if dur >= 4:
-                    events.append({"typ": "Signalqualität niedrig / Artefakt",
-                                   "zeit_s": float(g[0] * win / SAMPLING_RATE),
-                                   "wert": f"flaches/gestörtes Signal ~{dur} s"})
+    # 6) Signalqualität: bevorzugt NeuroKit-Qualität, sonst Flachlinien-Heuristik
+    if qt is not None and qv is not None and len(qt):
+        li = np.flatnonzero(qv < 0.4)
+        if len(li):
+            for g in np.split(li, np.flatnonzero(np.diff(li) > 1) + 1):
+                a, b = float(qt[g[0]]), float(qt[g[-1]])
+                events.append({"typ": "Signalqualität niedrig (NeuroKit2)",
+                               "zeit_s": a, "wert": f"schwaches Signal ~{max(8.0, b - a):.0f} s"})
+    else:
+        sig = dec.samples[:, 1].astype(float)
+        win = int(2 * SAMPLING_RATE)
+        nb = len(sig) // win
+        if nb:
+            stds = sig[:nb * win].reshape(nb, win).std(axis=1)
+            bi = np.flatnonzero(stds < 3.0)
+            if len(bi):
+                for g in np.split(bi, np.flatnonzero(np.diff(bi) > 1) + 1):
+                    dur = len(g) * 2
+                    if dur >= 4:
+                        events.append({"typ": "Signalqualität niedrig / Artefakt",
+                                       "zeit_s": float(g[0] * win / SAMPLING_RATE),
+                                       "wert": f"flaches/gestörtes Signal ~{dur} s"})
+
+    # Qualitätsfilter: Auffälligkeiten in schwachem Signal als „unsicher" kennzeichnen
+    for e in events:
+        if not e["typ"].startswith("Signalqualität") and _low_quality(e["zeit_s"]):
+            e["unsicher"] = True
+            e["wert"] = f"{e['wert']} · Signal unsicher"
 
     events.sort(key=lambda e: e["zeit_s"])
     return events
@@ -519,16 +619,18 @@ def edf_bytes(dec: DecodedRecord, dev: DeviceInfo) -> bytes:
 
 
 def build_report_pdf(dec: DecodedRecord, dev: DeviceInfo,
-                     brady=50.0, tachy=100.0) -> bytes:
+                     brady=50.0, tachy=100.0, nk: dict | None = None) -> bytes:
     """Mehrseitiger technischer Bericht als PDF (Bytes). KEINE Diagnose."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
 
+    if nk is None and HAS_NEUROKIT:
+        nk = neurokit_analysis(dec)
     m = hrv_metrics(dec)
     tc, hr_tr = hr_trend(dec, bin_s=30)
-    events = detect_events(dec, brady=brady, tachy=tachy)
+    events = detect_events(dec, brady=brady, tachy=tachy, nk=nk)
     counts = event_counts(events)
     hs = hourly_stats(dec)
     _, rr = rr_series(dec)
@@ -553,6 +655,22 @@ def build_report_pdf(dec: DecodedRecord, dev: DeviceInfo,
             f"Auffälligkeiten:    {len(events)} gesamt",
         ]
         fig.text(0.07, 0.93, "\n".join(lines), va="top", fontsize=9.5, family="monospace")
+
+        if nk:
+            hv = nk.get("hrv", {})
+
+            def _n(v):
+                return f"{v:.0f} ms" if isinstance(v, (int, float)) else "–"
+
+            nlines = ["NeuroKit2 (erweitert):",
+                      f"R-Zacken: {nk.get('n_rpeaks', '?')}"]
+            if nk.get("quality_mean") is not None:
+                nlines.append(f"Signalqualitaet Ø: {nk['quality_mean']:.2f}")
+                nlines.append(f"  niedrig: {nk.get('quality_low_pct', 0):.0f} % d. Fenster")
+            nlines += [f"SDNN/RMSSD: {_n(hv.get('SDNN'))} / {_n(hv.get('RMSSD'))}",
+                       f"Poincare SD1/SD2: {_n(hv.get('SD1'))} / {_n(hv.get('SD2'))}",
+                       f"LF/HF: {hv['LFHF']:.2f}" if hv.get("LFHF") is not None else "LF/HF: –"]
+            fig.text(0.55, 0.93, "\n".join(nlines), va="top", fontsize=9, family="monospace")
 
         ax1 = fig.add_axes((0.09, 0.52, 0.85, 0.22))
         if len(tc):
