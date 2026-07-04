@@ -336,30 +336,19 @@ def _auto_find_input() -> str | None:
     return None
 
 
-def _choose_directory(title: str, prompt: str) -> str | None:
-    """Ordner wählen: erst grafischer Dialog, sonst Texteingabe im Terminal.
+def _ask_path(prompt: str, default: str | None = None) -> str | None:
+    """Liest einen Pfad aus der Konsole (leere Eingabe -> default).
 
-    Rückgabe: gewählter Pfad, oder None (Dialog abgebrochen bzw. leer).
-    Fällt nur dann auf Texteingabe zurück, wenn KEIN Fenster möglich ist
-    (kein tkinter / kein Display) – nicht beim bewussten Abbrechen.
+    Bewusst Text statt grafischem Dialog: ein tkinter-Fenster öffnet sich unter
+    Wayland oft unsichtbar im Hintergrund und blockiert dann – Texteingabe
+    funktioniert im Linux-Terminal wie im Windows-Konsolenfenster zuverlässig.
+    Anführungszeichen (vom Ziehen/Kopieren) werden entfernt.
     """
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)      # Dialog in den Vordergrund holen
-        root.update()
-        path = filedialog.askdirectory(title=title)
-        root.destroy()
-        return path or None
-    except Exception:
-        # Kein grafisches Fenster möglich -> im Terminal nach dem Pfad fragen
-        try:
-            p = input(prompt).strip().strip('"').strip("'")
-            return p or None
-        except (EOFError, KeyboardInterrupt):
-            return None
+        p = input(prompt).strip().strip('"').strip("'")
+    except (EOFError, KeyboardInterrupt):
+        return default
+    return p or default
 
 
 def _default_output_dir() -> str:
@@ -383,29 +372,25 @@ def run_interactive() -> int:
     base = _auto_find_input()
     if base:
         print(f"\nGefundener Datenträger: {base}")
-        try:
-            if input("Diesen verwenden? [J/n] ").strip().lower() in ("n", "no", "nein"):
-                base = None
-        except (EOFError, KeyboardInterrupt):
-            pass
+        if (_ask_path("Diesen verwenden? [J/n] (leer = ja): ", default="j") or "j").lower() \
+                in ("n", "no", "nein"):
+            base = None
     if not base:
-        print("\nJetzt den Ordner des Datenträgers wählen (enthält ECG_0 und README.TXT).")
-        print("  -> Es öffnet sich ein Auswahlfenster (erscheint evtl. hinter diesem Fenster).")
-        picked = _choose_directory(
-            "Datenträger wählen (Ordner mit ECG_0)",
-            "Pfad zum Datenträger-Ordner eingeben (oder Laufwerk, z. B. E:\\): ")
-        base = resolve_input(picked) if picked else None
+        print("\nBitte den Ordner des Datenträgers angeben "
+              "(enthält ECG_0 und README.TXT).")
+        print("  Tipp: Das darf direkt das Laufwerk des Geräts sein, z. B.  E:\\")
+        print("  (Pfad eintippen oder den Ordner ins Fenster ziehen, dann Enter.)")
+        typed = _ask_path("Pfad: ")
+        base = resolve_input(typed) if typed else None
     if not base:
-        print("\nFEHLER: Kein gültiger Datenträger gewählt "
+        print("\nFEHLER: Kein gültiger Datenträger angegeben "
               "(es muss der Ordner mit ECG_0 und README.TXT sein).")
         _pause()
         return 2
 
-    print("\nJetzt den Zielordner wählen (wo die EDF/CSV gespeichert werden).")
-    print("  -> Auswahlfenster; Abbrechen = Desktop-Ordner '180D-EKG-Export'.")
-    out = _choose_directory(
-        "Zielordner wählen (Abbrechen = Desktop)",
-        f"Zielordner eingeben (leer = {_default_output_dir()}): ") or _default_output_dir()
+    default_out = _default_output_dir()
+    print("\nWohin sollen die Ergebnisse (EDF/CSV)?")
+    out = _ask_path(f"  Zielordner (leer = {default_out}): ", default=default_out)
     try:
         rc = convert(base, out)
     except Exception as e:  # noqa: BLE001 – Laien eine lesbare Meldung zeigen

@@ -53,39 +53,42 @@ Doppelklick.
 
 ## Linux / macOS
 
-**1. Python + Tk sicherstellen** (meist schon vorhanden)
+**1. Python sicherstellen** (meist schon vorhanden)
 ```bash
 # openSUSE:
-sudo zypper install python3 python3-tk
+sudo zypper install python3
 # Debian/Ubuntu:
-sudo apt install python3 python3-pip python3-tk
+sudo apt install python3 python3-pip
 ```
 
-**2. Starten**
+**2. Starten** (im Terminal)
 ```bash
 bash Start_Linux.sh
 ```
 
 ## Geführter Modus (die Ordner-Abfrage)
 
-Wird das Programm **ohne Argumente** gestartet (Doppelklick / Starter), fragt es
-selbst nach den Ordnern:
+Wird das Programm **ohne Argumente** gestartet (Starter oder `python 180dconvert.py`
+im Terminal / Konsolenfenster), fragt es direkt in der Konsole nach den Ordnern:
 
 1. Es **sucht den Datenträger automatisch**. Wird er gefunden, nur mit **Enter**
-   bestätigen; sonst öffnet sich ein **Ordner-Auswahlfenster** zum Anklicken.
-2. Danach ein **zweites Fenster** für den Zielordner (Abbrechen = Ergebnisse auf
-   dem Desktop unter `180D-EKG-Export`).
+   bestätigen; sonst den **Pfad eingeben** (oder den Ordner ins Fenster ziehen –
+   der Pfad wird eingefügt – dann Enter). Das darf direkt das Laufwerk sein, z. B.
+   `E:\`.
+2. Danach den **Zielordner** eingeben (leer lassen = Desktop-Ordner
+   `180D-EKG-Export`).
 3. Umwandeln, „Fertig", mit **Enter** schließen.
 
-> Die Auswahlfenster brauchen `tkinter`. Unter Windows ist es bei Python dabei,
-> unter Linux ggf. `python3-tk` nachinstallieren.
+> Bewusst per Text-Eingabe statt Klick-Dialog – das funktioniert im Windows-
+> Konsolenfenster wie im Linux-Terminal zuverlässig und kann nicht „hängen".
 
 ## Wenn etwas nicht klappt
 
 - **„Python ist nicht installiert / nicht im PATH"** → Python neu installieren und
   **„Add Python to PATH"** ankreuzen.
-- **Kein Auswahlfenster (Linux)** → `python3-tk` installieren – oder die Pfade
-  direkt angeben (siehe *Nutzung über die Kommandozeile*).
+- **Es passiert nichts / kein Fenster** → das Programm läuft **im Terminal /
+  Konsolenfenster** und fragt dort per Text. Nicht per Doppelklick im Dateimanager
+  starten, sondern über den Starter bzw. aus einem Terminal.
 - **„Kein gültiger Datenträger"** → es muss der Ordner sein, der `README.TXT` und
   `ECG_0` enthält (oder direkt das Laufwerk des Geräts).
 
