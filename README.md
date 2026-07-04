@@ -99,11 +99,16 @@ im Terminal / Konsolenfenster), fragt es direkt in der Konsole nach den Ordnern:
 Alternative für alle, die lieber direkt mit Pfaden arbeiten oder das Tool in
 Skripte einbinden möchten.
 
-**Installation:** Python 3.10+ und die Bibliotheken:
+**Installation:** Python 3.10+ und die Bibliotheken. Am besten in einer lokalen
+Umgebung (`venv`) – auf vielen Linux-Distributionen ist ein System-`pip install`
+gesperrt (PEP 668 „externally managed"):
 ```bash
-pip install numpy edfio matplotlib
+python3 -m venv .venv
+.venv/bin/pip install numpy edfio matplotlib      # Windows: .venv\Scripts\pip install ...
 ```
-(`matplotlib` ist optional, nur für den Kontroll-Plot.)
+(`matplotlib` ist optional, nur für den Kontroll-Plot.) Danach mit
+`.venv/bin/python 180dconvert.py …` aufrufen. Der **Starter** (`Start_*.sh/.bat`)
+erledigt genau diese Einrichtung automatisch.
 
 **Aufruf:**
 ```bash

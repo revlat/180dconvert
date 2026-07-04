@@ -266,6 +266,17 @@ def convert(input_dir: str, output_dir: str, formats=("edf", "csv"),
         log(f"FEHLER: In '{input_dir}' kein Datenträger (README.TXT + ECG_0/) gefunden.")
         return 2
 
+    # Abhängigkeiten früh prüfen -> klare Meldung statt Traceback mitten im Lauf
+    if "edf" in formats:
+        try:
+            import edfio  # noqa: F401
+        except ImportError:
+            log("FEHLER: Für den EDF-Export fehlt das Paket 'edfio'.")
+            log("  Am einfachsten den Starter nutzen (Start_Windows.bat / Start_Linux.sh),")
+            log("  oder manuell:  pip install edfio")
+            log("  (Alternativ nur CSV erzeugen:  --formats csv)")
+            return 3
+
     dev = parse_readme(os.path.join(base, "README.TXT"))
     os.makedirs(output_dir, exist_ok=True)
     log(f"Eingabe: {base}")
