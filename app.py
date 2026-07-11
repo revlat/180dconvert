@@ -133,38 +133,55 @@ tab_view, tab_ana, tab_export = st.tabs(["📈 EKG ansehen", "🔬 Analyse", "�
 with tab_view:
     fs = h.SAMPLING_RATE
     ss.setdefault("start_min", 0.0)
-    picked_event = None
-    pick = "—"
+    ss.setdefault("event_pick", "—")
+
+    ev_list = ana["events"]
+    labels = [f"{e['nr']}: {clock(dec, e['zeit_s'])} – {e['typ']}" for e in ev_list]
+    label_by_nr = {e["nr"]: labels[i] for i, e in enumerate(ev_list)}
+    event_by_label = {labels[i]: ev_list[i] for i in range(len(ev_list))}
+    if ss.event_pick not in (["—"] + labels):     # z. B. nach Aufnahme-Wechsel
+        ss.event_pick = "—"
 
     left, right = st.columns([3, 2])
     with right:
         win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60], value=10,
                                format_func=lambda s: f"{s} s")
-        if ana["events"]:
-            labels = [f"{e['nr']}: {clock(dec, e['zeit_s'])} – {e['typ']}"
-                      for e in ana["events"]]
-            # Breite nur so groß wie der längste Eintrag (gedeckelt), statt volle Spalte
+        max_min = max(0.0, (dec.duration_s - win) / 60.0)
+
+        # --- Klick im Navigator (aus vorherigem Lauf) VOR der Selectbox auswerten ---
+        nav_pts = ((ss.get("nav") or {}).get("selection", {}) or {}).get("points", [])
+        nav_x = nav_pts[0].get("x") if nav_pts else None
+        nav_nr = None
+        for p in nav_pts:                          # Marker tragen customdata [nr, typ]
+            if p.get("customdata"):
+                nav_nr, nav_x = p["customdata"][0], p.get("x")
+                break
+        if nav_nr is None and nav_x is not None and ev_list:   # Fallback: exakt auf Markerposition?
+            ex_min = np.array([e["zeit_s"] for e in ev_list]) / 60.0
+            j = int(np.argmin(np.abs(ex_min - nav_x)))
+            if abs(ex_min[j] - nav_x) < 1e-6:
+                nav_nr = ev_list[j]["nr"]
+        if nav_x is not None and nav_x != ss.get("_nav_applied"):
+            ss._nav_applied = nav_x
+            if nav_nr is not None and nav_nr in label_by_nr:
+                ss.event_pick = label_by_nr[nav_nr]            # Marker -> Auffälligkeit wählen
+            else:                                              # freie Stelle -> Auswahl aufheben
+                ss.event_pick = "—"
+                ss.start_min = float(min(max(0.0, nav_x - (win / 3) / 60.0), max_min))
+
+        if labels:
             box_w = min(520, 60 + max(len(l) for l in labels) * 7)
-            pick = st.selectbox("Zu Auffälligkeit (Nr.) springen", ["—"] + labels,
-                                width=box_w)
-            if pick != "—":
-                picked_event = ana["events"][labels.index(pick)]
+            st.selectbox("Zu Auffälligkeit (Nr.) springen", ["—"] + labels,
+                         key="event_pick", width=box_w)
 
-    max_min = max(0.0, (dec.duration_s - win) / 60.0)
+    pick = ss.event_pick if labels else "—"
+    picked_event = event_by_label.get(pick)
 
-    # Sprungziel nur bei NEUER Auswahl/Klick anwenden -> der Startzeit-Slider bleibt frei.
-    jump_s = None
-    pick_key = pick if pick != "—" else None
-    if pick_key and pick_key != ss.get("_pick_applied") and picked_event is not None:
-        jump_s = picked_event["zeit_s"] - win / 3
-    ss._pick_applied = pick_key
-    nav_pts = ((ss.get("nav") or {}).get("selection", {}) or {}).get("points", [])
-    nav_x = nav_pts[0]["x"] if nav_pts else None
-    if nav_x is not None and nav_x != ss.get("_nav_applied"):
-        jump_s = nav_x * 60.0 - win / 3           # Klick-Minute -> Fenster leicht davor beginnen
-    ss._nav_applied = nav_x
-    if jump_s is not None:
-        ss.start_min = float(min(max(0.0, jump_s / 60.0), max_min))
+    # Sprung nur bei NEUER Auswahl -> der Startzeit-Slider bleibt danach frei bedienbar.
+    if pick != ss.get("_pick_applied"):
+        ss._pick_applied = pick
+        if picked_event is not None:
+            ss.start_min = float(min(max(0.0, (picked_event["zeit_s"] - win / 3) / 60.0), max_min))
     ss.start_min = float(min(ss.start_min, max_min))   # bei Fensterbreite-Wechsel clampen
 
     with left:
@@ -241,13 +258,46 @@ with tab_view:
         nav = go.Figure(go.Scatter(
             x=tc / 60.0, y=hrtr, mode="lines+markers",
             line=dict(color="crimson", width=1), marker=dict(size=3, color="crimson"),
-            hovertemplate="%{x:.1f} min · %{y:.0f} bpm<extra></extra>"))
+            name="Puls", hovertemplate="%{x:.1f} min · %{y:.0f} bpm<extra></extra>"))
         nav.add_vrect(x0=ss.view_start / 60.0, x1=(ss.view_start + win) / 60.0,
                       fillcolor="steelblue", opacity=0.25, line_width=0)
+
+        # Auffälligkeiten markieren: dünne Führungslinie + nummerierter Punkt im Band darüber
+        ev = ana["events"]
+        if ev:
+            ymin, ymax = float(np.min(hrtr)), float(np.max(hrtr))
+            span = max(1.0, ymax - ymin)
+            top = ymax + span * 0.18               # Markerband oberhalb der Pulskurve
+
+            xs, ys = [], []                        # 1) senkrechte Führungslinien (nicht klickbar)
+            for e in ev:
+                x = e["zeit_s"] / 60.0
+                xs += [x, x, None]
+                ys += [ymin, top, None]
+            nav.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
+                                     line=dict(color="rgba(255,127,14,0.45)", width=1),
+                                     hoverinfo="skip", showlegend=False, name="Marker"))
+
+            ex = np.array([e["zeit_s"] for e in ev], dtype=float) / 60.0
+            colors = ["#9aa0a6" if e.get("unsicher") else "#ff7f0e" for e in ev]
+            cd = [[e["nr"], e["typ"]] for e in ev]
+            show_text = len(ev) <= 40              # bei sehr vielen nur Punkte (sonst Textsalat)
+            nav.add_trace(go.Scatter(     # 2) nummerierte Punkte oben (klickbar -> EKG springt hin)
+                x=ex, y=np.full(len(ev), top), mode="markers+text" if show_text else "markers",
+                text=[str(e["nr"]) for e in ev] if show_text else None,
+                textposition="top center", textfont=dict(size=9, color="#333"),
+                marker=dict(symbol="circle", size=9, color=colors,
+                            line=dict(color="black", width=0.6)),
+                customdata=cd, name="Auffälligkeit",
+                hovertemplate="Nr. %{customdata[0]}: %{customdata[1]}<br>"
+                              "%{x:.1f} min<extra></extra>"))
+            nav.update_yaxes(range=[ymin - span * 0.12, top + span * 0.22])
+
         nav.update_layout(
             height=210, margin=dict(l=50, r=20, t=30, b=36),
-            title=dict(text="Puls – ganze Aufnahme (Punkt anklicken → EKG springt dorthin; "
-                            "blau = aktuelles Fenster)", font=dict(size=13)),
+            title=dict(text="Puls – ganze Aufnahme (Punkt/Nummer anklicken → EKG springt dorthin; "
+                            "orange = Auffälligkeit, blau = aktuelles Fenster)",
+                       font=dict(size=13)),
             xaxis_title="Zeit [min]", yaxis_title="bpm",
             showlegend=False, clickmode="event+select")
         st.plotly_chart(nav, key="nav", on_select="rerun", selection_mode="points")
