@@ -1,0 +1,4 @@
+[client]
+# "minimal": blendet die komplette Streamlit-Toolbar aus
+# (kein "Deploy"-Button, kein Hamburger-Menü).
+toolbarMode = "minimal"
