@@ -499,11 +499,18 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
 
     # 1) Pausen (langes RR)
     for ti, rri in zip(t[rr >= pause_s], rr[rr >= pause_s]):
-        events.append({"typ": "Pause", "zeit_s": float(ti - rri),
-                       "wert": f"{rri:.1f} s ohne Schlag"})
+        events.append({
+            "typ": "Pause", "zeit_s": float(ti - rri),
+            "dauer_s": float(rri),
+            "wert": f"{rri:.1f} s ohne Schlag",
+            "detail": (
+                f"Zwischen zwei erkannten R-Zacken lagen {rri:.1f} s ganz ohne Herzschlag. "
+                f"Erkannt, weil der Abstand zweier Schläge ≥ {pause_s:.0f} s war "
+                f"(an dieser Stelle rechnerisch nur ~{60.0 / rri:.0f} bpm). "
+                f"Je länger die Pause, desto auffälliger.")})
 
     # 2) anhaltende Brady-/Tachykardie (>= 5 Schläge in Folge)
-    def _sustained(mask, label, fmt):
+    def _sustained(mask, label, kind):
         i = 0
         while i < len(mask):
             if mask[i]:
@@ -511,16 +518,33 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
                 while j < len(mask) and mask[j]:
                     j += 1
                 if j - i >= 5:
+                    seg = hr[i:j]
+                    dur = float(t[j - 1] - t[i])
+                    nbeats = j - i
+                    mean_hr = float(np.mean(seg))
+                    if kind == "brady":
+                        extreme = float(np.min(seg))
+                        detail = (
+                            f"{nbeats} aufeinanderfolgende Schläge mit im Schnitt "
+                            f"~{mean_hr:.0f} bpm über {dur:.0f} s; langsamster Schlag "
+                            f"~{extreme:.0f} bpm. Erkannt, weil ≥ 5 Schläge in Folge unter "
+                            f"{brady:.0f} bpm lagen (anhaltend langsamer Rhythmus).")
+                    else:
+                        extreme = float(np.max(seg))
+                        detail = (
+                            f"{nbeats} aufeinanderfolgende Schläge mit im Schnitt "
+                            f"~{mean_hr:.0f} bpm über {dur:.0f} s; schnellster Schlag "
+                            f"~{extreme:.0f} bpm. Erkannt, weil ≥ 5 Schläge in Folge über "
+                            f"{tachy:.0f} bpm lagen (anhaltend schneller Rhythmus).")
                     events.append({"typ": label, "zeit_s": float(t[i]),
-                                   "wert": fmt(hr[i:j], t[j - 1] - t[i])})
+                                   "dauer_s": dur, "wert": f"~{mean_hr:.0f} bpm über {dur:.0f} s",
+                                   "detail": detail})
                 i = j
             else:
                 i += 1
 
-    _sustained((hr < brady) & (hr > 20), "Bradykardie",
-               lambda s, d: f"~{np.mean(s):.0f} bpm über {d:.0f} s")
-    _sustained(hr > tachy, "Tachykardie",
-               lambda s, d: f"~{np.mean(s):.0f} bpm über {d:.0f} s")
+    _sustained((hr < brady) & (hr > 20), "Bradykardie", "brady")
+    _sustained(hr > tachy, "Tachykardie", "tachy")
 
     # 3) Extrasystolen: deutlich vorzeitige Schläge (>=20 % früher als lokal üblich),
     #    in Häufungen gruppiert. Kompensatorische Pause wird notiert, aber nicht verlangt.
@@ -532,8 +556,25 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
     if len(pidx):
         for g in np.split(pidx, np.flatnonzero(np.diff(t[pidx]) > 10.0) + 1):
             n = len(g)
+            ratios = rr[g] / med[g]                       # < 0.8 = so viel früher
+            avg_early = float((1.0 - np.mean(ratios)) * 100.0)
+            max_early = float((1.0 - np.min(ratios)) * 100.0)
+            dur = float(t[g[-1]] - t[g[0]])
+            if n == 1:
+                wert = "vorzeitiger Schlag"
+                detail = (
+                    f"Ein einzelner Schlag kam {avg_early:.0f} % früher als der lokale Median "
+                    f"der Schlag-Abstände. Erkannt als ≥ 20 % verfrühter Schlag – typisch für "
+                    f"eine Extrasystole (Extraschlag).")
+            else:
+                wert = f"{n} vorzeitige Schläge"
+                detail = (
+                    f"{n} verfrühte Schläge innerhalb von {dur:.0f} s gehäuft, im Schnitt "
+                    f"{avg_early:.0f} % (bis zu {max_early:.0f} %) früher als der lokale Median "
+                    f"der Schlag-Abstände. Erkannt als ≥ 20 % verfrühte Schläge – typisch für "
+                    f"Extrasystolen.")
             events.append({"typ": "Extrasystolen (Verdacht)", "zeit_s": float(t[g[0]]),
-                           "wert": f"{n} vorzeitige Schläge" if n > 1 else "vorzeitiger Schlag"})
+                           "dauer_s": dur, "wert": wert, "detail": detail})
 
     # 4) Unregelmäßiger Rhythmus (Verdacht): "irregularly irregular" im 30-Schlag-Fenster
     dabs = np.abs(np.diff(rr))
@@ -544,16 +585,29 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
         if len(fi):
             for g in np.split(fi, np.flatnonzero(np.diff(fi) > W) + 1):
                 a, b = g[0], min(g[-1] + W, len(t) - 1)
-                if t[b] - t[a] >= 10:
-                    events.append({"typ": "Unregelmäßiger Rhythmus (Verdacht)",
-                                   "zeit_s": float(t[a]), "wert": f"über {t[b]-t[a]:.0f} s"})
+                dur = float(t[b] - t[a])
+                if dur >= 10:
+                    events.append({
+                        "typ": "Unregelmäßiger Rhythmus (Verdacht)",
+                        "zeit_s": float(t[a]), "dauer_s": dur, "wert": f"über {dur:.0f} s",
+                        "detail": (
+                            f"Über {dur:.0f} s wechselten die Schlag-Abstände stark und ohne "
+                            f"erkennbares Muster: In mehr als der Hälfte eines 30-Schlag-Fensters "
+                            f"sprangen aufeinanderfolgende Abstände um über 120 ms. Muster eines "
+                            f"„unregelmäßig unregelmäßigen“ Rhythmus.")})
 
     # 5) Geräte-Marker (unregelmäßige Schläge)
     irr_idx = np.flatnonzero(dec.irregular)
     if len(irr_idx):
         for g in np.split(irr_idx, np.flatnonzero(np.diff(irr_idx) > SAMPLING_RATE * 2) + 1):
-            events.append({"typ": "Unregelmäßig (Gerät)", "zeit_s": float(g[0] / SAMPLING_RATE),
-                           "wert": f"{len(g)} markierte Stelle(n)"})
+            dur = float((g[-1] - g[0]) / SAMPLING_RATE)
+            events.append({
+                "typ": "Unregelmäßig (Gerät)", "zeit_s": float(g[0] / SAMPLING_RATE),
+                "dauer_s": dur, "wert": f"{len(g)} markierte Stelle(n)",
+                "detail": (
+                    f"{len(g)} Stelle(n) über ~{max(1.0, dur):.0f} s, die das Gerät selbst "
+                    f"während der Aufnahme als unregelmäßigen Schlag markiert hat. Direkt aus "
+                    f"den Geräte-Markierungen übernommen – nicht aus der Software-Analyse.")})
 
     # 6) Signalqualität: bevorzugt NeuroKit-Qualität, sonst Flachlinien-Heuristik
     if qt is not None and qv is not None and len(qt):
@@ -561,8 +615,14 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
         if len(li):
             for g in np.split(li, np.flatnonzero(np.diff(li) > 1) + 1):
                 a, b = float(qt[g[0]]), float(qt[g[-1]])
-                events.append({"typ": "Signalqualität niedrig (NeuroKit2)",
-                               "zeit_s": a, "wert": f"schwaches Signal ~{max(8.0, b - a):.0f} s"})
+                dur = max(8.0, b - a)
+                events.append({
+                    "typ": "Signalqualität niedrig (NeuroKit2)", "zeit_s": a, "dauer_s": dur,
+                    "wert": f"schwaches Signal ~{dur:.0f} s",
+                    "detail": (
+                        f"Über ~{dur:.0f} s lag der NeuroKit2-Qualitätsindex unter 0.4 "
+                        f"(schwaches/gestörtes Signal, oft Bewegung oder Elektrodenkontakt). "
+                        f"Auffälligkeiten in diesem Abschnitt sind nur eingeschränkt beurteilbar.")})
     else:
         sig = dec.samples[:, 1].astype(float)
         win = int(2 * SAMPLING_RATE)
@@ -574,17 +634,26 @@ def detect_events(dec: DecodedRecord, brady=50.0, tachy=100.0, pause_s=2.0,
                 for g in np.split(bi, np.flatnonzero(np.diff(bi) > 1) + 1):
                     dur = len(g) * 2
                     if dur >= 4:
-                        events.append({"typ": "Signalqualität niedrig / Artefakt",
-                                       "zeit_s": float(g[0] * win / SAMPLING_RATE),
-                                       "wert": f"flaches/gestörtes Signal ~{dur} s"})
+                        events.append({
+                            "typ": "Signalqualität niedrig / Artefakt",
+                            "zeit_s": float(g[0] * win / SAMPLING_RATE), "dauer_s": float(dur),
+                            "wert": f"flaches/gestörtes Signal ~{dur} s",
+                            "detail": (
+                                f"Über ~{dur} s war das Signal flach oder gestört (sehr geringe "
+                                f"Amplituden-Streuung). Heuristisch erkannt, weil NeuroKit2 nicht "
+                                f"verfügbar war – vermutlich Elektroden-/Kontaktproblem.")})
 
     # Qualitätsfilter: Auffälligkeiten in schwachem Signal als „unsicher" kennzeichnen
     for e in events:
         if not e["typ"].startswith("Signalqualität") and _low_quality(e["zeit_s"]):
             e["unsicher"] = True
             e["wert"] = f"{e['wert']} · Signal unsicher"
+            e["detail"] = (f"{e['detail']} Hinweis: Das Signal ist hier schwach – "
+                           f"diese Erkennung ist unsicher.")
 
     events.sort(key=lambda e: e["zeit_s"])
+    for i, e in enumerate(events, 1):     # feste, konsistente Nummer (nach Sortierung)
+        e["nr"] = i
     return events
 
 
@@ -737,11 +806,14 @@ def build_report_pdf(dec: DecodedRecord, dev: DeviceInfo,
             fig = plt.figure(figsize=(8.27, 11.69))
             fig.suptitle("Auffälligkeiten – Liste (zur Durchsicht)", fontsize=14)
             rows = events[:60]
-            txt = "\n".join(f"{_clock(dec, e['zeit_s']):>17}  {e['typ']:<34.34} {e['wert']}"
-                            for e in rows)
+            txt = "\n".join(
+                f"{e.get('nr', i + 1):>3}  {_clock(dec, e['zeit_s']):>17}  "
+                f"{e['typ']:<32.32} {e['wert']}"
+                for i, e in enumerate(rows))
             if len(events) > 60:
                 txt += f"\n\n… und {len(events) - 60} weitere (siehe App)."
-            fig.text(0.05, 0.93, txt, va="top", fontsize=7.5, family="monospace")
+            fig.text(0.05, 0.93, "Nr.        Zeit           Typ / Erkennung\n\n" + txt,
+                     va="top", fontsize=7.5, family="monospace")
             fig.text(0.07, 0.03, foot, fontsize=8, style="italic")
             pdf.savefig(fig); plt.close(fig)
     return buf.getvalue()

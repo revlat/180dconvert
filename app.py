@@ -131,21 +131,34 @@ tab_view, tab_ana, tab_export = st.tabs(["📈 EKG ansehen", "🔬 Analyse", "�
 
 # =========================================================================== #
 with tab_view:
-    left, right = st.columns([3, 1])
+    picked_event = None
+    left, right = st.columns([3, 2])
     with right:
         win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60], value=10,
                                format_func=lambda s: f"{s} s")
         if ana["events"]:
-            labels = [f"{e['typ']} – {clock(dec, e['zeit_s'])}" for e in ana["events"]]
-            pick = st.selectbox("Zu Auffälligkeit springen", ["—"] + labels)
+            labels = [f"{e['nr']}: {clock(dec, e['zeit_s'])} – {e['typ']}"
+                      for e in ana["events"]]
+            # Breite nur so groß wie der längste Eintrag (gedeckelt), statt volle Spalte
+            box_w = min(520, 60 + max(len(l) for l in labels) * 7)
+            pick = st.selectbox("Zu Auffälligkeit (Nr.) springen", ["—"] + labels,
+                                width=box_w)
             if pick != "—":
-                ss.view_start = max(0.0, ana["events"][labels.index(pick)]["zeit_s"] - win / 3)
+                picked_event = ana["events"][labels.index(pick)]
+                ss.view_start = max(0.0, picked_event["zeit_s"] - win / 3)
     with left:
         max_start = max(0.0, dec.duration_s - win)
         ss.view_start = st.slider("Startzeit (Minuten)", 0.0, max_start / 60,
                                   min(ss.view_start, max_start) / 60, step=0.05) * 60
         st.caption(f"Zeigt **{clock(dec, ss.view_start)}** … "
                    f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec)")
+
+    if picked_event is not None:
+        e = picked_event
+        dauer = f"  ·  Dauer {e['dauer_s']:.0f} s" if e.get("dauer_s") else ""
+        box = (f"**Nr. {e['nr']} – {e['typ']}**  ·  {clock(dec, e['zeit_s'])}{dauer}\n\n"
+               f"{e.get('detail', e['wert'])}")
+        (st.warning if e.get("unsicher") else st.info)(box)
 
     fs = h.SAMPLING_RATE
     i0 = int(ss.view_start * fs)
@@ -217,10 +230,17 @@ with tab_ana:
                 "`pip install neurokit2` – oder den GUI-Starter erneut ausführen.")
 
     st.subheader("Auffälligkeiten (Hinweise zur Durchsicht – keine Diagnose)")
+    st.caption("Die **Nr.** ist dieselbe wie im Auswahlmenü „Zu Auffälligkeit springen“ "
+               "im Tab „EKG ansehen“.")
     ev = ana["events"]
     if ev:
-        st.dataframe([{"Zeit": clock(dec, e["zeit_s"]), "Typ": e["typ"], "Info": e["wert"]}
-                      for e in ev], width="stretch", hide_index=True)
+        st.dataframe(
+            [{"Nr.": e["nr"], "Zeit": clock(dec, e["zeit_s"]), "Typ": e["typ"],
+              "Dauer": (f"{e['dauer_s']:.0f} s" if e.get("dauer_s") else "–"),
+              "Wie & warum erkannt / Besonderheiten": e.get("detail", e["wert"])}
+             for e in ev],
+            width="stretch", hide_index=True,
+            column_config={"Wie & warum erkannt / Besonderheiten": st.column_config.TextColumn(width="large")})
     else:
         st.write("Keine markanten Auffälligkeiten erkannt.")
 
