@@ -131,7 +131,11 @@ tab_view, tab_ana, tab_export = st.tabs(["📈 EKG ansehen", "🔬 Analyse", "�
 
 # =========================================================================== #
 with tab_view:
+    fs = h.SAMPLING_RATE
+    ss.setdefault("start_min", 0.0)
     picked_event = None
+    pick = "—"
+
     left, right = st.columns([3, 2])
     with right:
         win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60], value=10,
@@ -145,11 +149,30 @@ with tab_view:
                                 width=box_w)
             if pick != "—":
                 picked_event = ana["events"][labels.index(pick)]
-                ss.view_start = max(0.0, picked_event["zeit_s"] - win / 3)
+
+    max_min = max(0.0, (dec.duration_s - win) / 60.0)
+
+    # Sprungziel nur bei NEUER Auswahl/Klick anwenden -> der Startzeit-Slider bleibt frei.
+    jump_s = None
+    pick_key = pick if pick != "—" else None
+    if pick_key and pick_key != ss.get("_pick_applied") and picked_event is not None:
+        jump_s = picked_event["zeit_s"] - win / 3
+    ss._pick_applied = pick_key
+    nav_pts = ((ss.get("nav") or {}).get("selection", {}) or {}).get("points", [])
+    nav_x = nav_pts[0]["x"] if nav_pts else None
+    if nav_x is not None and nav_x != ss.get("_nav_applied"):
+        jump_s = nav_x * 60.0 - win / 3           # Klick-Minute -> Fenster leicht davor beginnen
+    ss._nav_applied = nav_x
+    if jump_s is not None:
+        ss.start_min = float(min(max(0.0, jump_s / 60.0), max_min))
+    ss.start_min = float(min(ss.start_min, max_min))   # bei Fensterbreite-Wechsel clampen
+
     with left:
-        max_start = max(0.0, dec.duration_s - win)
-        ss.view_start = st.slider("Startzeit (Minuten)", 0.0, max_start / 60,
-                                  min(ss.view_start, max_start) / 60, step=0.05) * 60
+        if max_min > 0:
+            st.slider("Startzeit (Minuten)", 0.0, max_min, key="start_min", step=0.05)
+        else:
+            ss.start_min = 0.0
+        ss.view_start = ss.start_min * 60.0
         st.caption(f"Zeigt **{clock(dec, ss.view_start)}** … "
                    f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec)")
 
@@ -160,31 +183,76 @@ with tab_view:
                f"{e.get('detail', e['wert'])}")
         (st.warning if e.get("unsicher") else st.info)(box)
 
-    fs = h.SAMPLING_RATE
+    # ---- Haupt-EKG: aktuelles Fenster in VOLLER Auflösung + Puls des Fensters ----
     i0 = int(ss.view_start * fs)
     i1 = min(dec.n_samples, i0 + int(win * fs))
     t = np.arange(i0, i1) / fs
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04,
-                        subplot_titles=[f"Ableitung {l}" for l in h.LEAD_LABELS])
+
+    # Schlagquelle (NeuroKit-R-Zacken bevorzugt, sonst Geräte-Marker) – global,
+    # damit der Puls auch am Fensterrand nahtlos anschließt.
+    nkinfo = ana.get("nk")
+    if nkinfo and nkinfo.get("rpeaks") is not None:
+        all_beats = np.asarray(nkinfo["rpeaks"])
+    else:
+        all_beats = np.flatnonzero(dec.qrs)
+    beats = all_beats[(all_beats >= i0) & (all_beats < i1)]
+
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.045,
+                        row_heights=[0.27, 0.27, 0.27, 0.19],
+                        subplot_titles=[f"Ableitung {l}" for l in h.LEAD_LABELS]
+                        + ["Puls (bpm)"])
     for r, lbl in enumerate(h.LEAD_LABELS):
         fig.add_trace(go.Scatter(x=t, y=dec.samples[i0:i1, r] * h.MV_PER_UNIT,
                                  mode="lines", line=dict(color="black", width=1)),
                       row=r + 1, col=1)
         fig.update_yaxes(title_text="mV", row=r + 1, col=1, zeroline=True,
                          gridcolor="rgba(255,0,0,0.2)")
-    nkinfo = ana.get("nk")
-    if nkinfo and nkinfo.get("rpeaks") is not None:
-        rp = np.asarray(nkinfo["rpeaks"])
-        beats = rp[(rp >= i0) & (rp < i1)]
-    else:
-        beats = np.flatnonzero(dec.qrs[i0:i1]) + i0
     if len(beats):
         fig.add_trace(go.Scatter(x=beats / fs, y=dec.samples[beats, 1] * h.MV_PER_UNIT,
                                  mode="markers", marker=dict(color="red", size=6),
                                  name="QRS"), row=2, col=1)
-    fig.update_xaxes(title_text="Zeit [s]", row=3, col=1, gridcolor="rgba(255,0,0,0.2)")
-    fig.update_layout(height=620, showlegend=False, margin=dict(l=50, r=20, t=40, b=40))
+
+    # Pulsverlauf: Momentan-Herzfrequenz (60/RR) an jedem Schlag im sichtbaren Fenster.
+    bt = all_beats / fs
+    if len(bt) >= 2:
+        rr = np.diff(bt)
+        hr_t = bt[1:]
+        hr_v = np.where(rr > 0, 60.0 / rr, np.nan)
+        margin = win * 0.5                        # Randpunkte mitnehmen -> Linie bis zum Rand
+        sel = ((hr_t >= t[0] - margin) & (hr_t <= (t[-1] if len(t) else 0) + margin)
+               & (hr_v > 25) & (hr_v < 250))
+        if np.any(sel):
+            fig.add_trace(go.Scatter(x=hr_t[sel], y=hr_v[sel], mode="lines+markers",
+                                     line=dict(color="crimson", width=1.5),
+                                     marker=dict(size=5, color="crimson"),
+                                     name="Puls",
+                                     hovertemplate="%{x:.1f} s · %{y:.0f} bpm<extra></extra>"),
+                          row=4, col=1)
+    fig.update_yaxes(title_text="bpm", row=4, col=1, gridcolor="rgba(255,0,0,0.2)")
+    fig.update_xaxes(title_text="Zeit [s]", row=4, col=1, gridcolor="rgba(255,0,0,0.2)")
+    if len(t):                                     # x-Bereich exakt aufs Fenster begrenzen
+        fig.update_xaxes(range=[t[0], t[-1]])
+    fig.update_layout(height=780, showlegend=False, margin=dict(l=50, r=20, t=40, b=40))
     st.plotly_chart(fig, width="stretch")
+
+    # ---- Navigator: Puls der GANZEN Aufnahme, klickbar (EKG bleibt oben voll aufgelöst) ----
+    tc, hrtr = ana["trend"]                        # 30-s-Mittel, günstig für die Übersicht
+    if len(tc):
+        nav = go.Figure(go.Scatter(
+            x=tc / 60.0, y=hrtr, mode="lines+markers",
+            line=dict(color="crimson", width=1), marker=dict(size=3, color="crimson"),
+            hovertemplate="%{x:.1f} min · %{y:.0f} bpm<extra></extra>"))
+        nav.add_vrect(x0=ss.view_start / 60.0, x1=(ss.view_start + win) / 60.0,
+                      fillcolor="steelblue", opacity=0.25, line_width=0)
+        nav.update_layout(
+            height=210, margin=dict(l=50, r=20, t=30, b=36),
+            title=dict(text="Puls – ganze Aufnahme (Punkt anklicken → EKG springt dorthin; "
+                            "blau = aktuelles Fenster)", font=dict(size=13)),
+            xaxis_title="Zeit [min]", yaxis_title="bpm",
+            showlegend=False, clickmode="event+select")
+        st.plotly_chart(nav, key="nav", on_select="rerun", selection_mode="points")
+    else:
+        st.caption("Kein Pulsverlauf für die Übersicht verfügbar (zu wenige Schläge erkannt).")
 
 # =========================================================================== #
 with tab_ana:
