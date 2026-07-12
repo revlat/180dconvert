@@ -75,10 +75,31 @@ def auto_find() -> str | None:
     return None
 
 
-def clock(dec, sec: float) -> str:
+def elapsed_str(sec: float) -> str:
+    """Verstrichene Zeit seit Aufnahmebeginn als (H:)MM:SS."""
+    s = int(round(max(0.0, sec)))
+    h_, rem = divmod(s, 3600)
+    m_, s_ = divmod(rem, 60)
+    return f"{h_}:{m_:02d}:{s_:02d}" if h_ else f"{m_}:{s_:02d}"
+
+
+def abs_clock(dec, sec: float) -> str:
+    """Absolute Uhrzeit (HH:MM:SS) an dieser Stelle – leer, wenn kein Startzeitpunkt."""
     if dec.start is None:
-        return f"{sec:.0f} s"
-    return (dec.start + timedelta(seconds=sec)).strftime("%d.%m %H:%M:%S")
+        return ""
+    return (dec.start + timedelta(seconds=sec)).strftime("%H:%M:%S")
+
+
+def clock(dec, sec: float) -> str:
+    """Zeitangabe mit BEIDEN Bezügen: +verstrichen seit Start und absolute Uhrzeit.
+
+    Format: ``+m:ss (dd.mm HH:MM:SS)`` bzw. nur ``+m:ss``, falls kein
+    Startzeitpunkt aus der README bekannt ist.
+    """
+    rel = f"+{elapsed_str(sec)}"
+    if dec.start is None:
+        return rel
+    return f"{rel} ({(dec.start + timedelta(seconds=sec)):%d.%m %H:%M:%S})"
 
 
 def load_source(base: str) -> None:
@@ -231,8 +252,9 @@ with tab_view:
         else:
             ss.start_min = 0.0
         ss.view_start = ss.start_min * 60.0
+        conv = " · Zeit als **+verstrichen (Uhrzeit)**" if dec.start else ""
         st.caption(f"Zeigt **{clock(dec, ss.view_start)}** … "
-                   f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec)")
+                   f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec){conv}")
 
         # Export des aktuell gezeigten Ausschnitts: EDF+ und druckfertiges PDF nebeneinander
         i0 = int(ss.view_start * fs)
@@ -274,8 +296,15 @@ with tab_view:
                f"{e.get('detail', e['wert'])}")
         (st.warning if e.get("unsicher") else st.info)(box)
 
-    # ---- Haupt-EKG: aktuelles Fenster in VOLLER Auflösung + Puls des Fensters ----
-    t = np.arange(i0, i1) / fs
+    # ---- Haupt-EKG: aktuelles Fenster in VOLLER Auflösung (+ Puffer für "Pan") ----
+    # Damit das Plotly-Werkzeug „Pan“ (horizontales Ziehen) nicht ins Leere läuft,
+    # laden wir zusätzlich einen Puffer links und rechts vom Fenster. Sichtbar ist
+    # zunächst nur das Fenster; beim Verschieben werden die Pufferdaten aufgedeckt.
+    MAX_SPAN = 120.0                                   # max. voll aufgelöste Spanne [s]
+    pad_s = max(0.0, min(float(win), (MAX_SPAN - win) / 2.0))
+    i0b = max(0, i0 - int(pad_s * fs))
+    i1b = min(dec.n_samples, i1 + int(pad_s * fs))
+    t = np.arange(i0b, i1b) / fs
 
     # Schlagquelle (NeuroKit-R-Zacken bevorzugt, sonst Geräte-Marker) – global,
     # damit der Puls auch am Fensterrand nahtlos anschließt.
@@ -284,7 +313,27 @@ with tab_view:
         all_beats = np.asarray(nkinfo["rpeaks"])
     else:
         all_beats = np.flatnonzero(dec.qrs)
-    beats = all_beats[(all_beats >= i0) & (all_beats < i1)]
+    beats = all_beats[(all_beats >= i0b) & (all_beats < i1b)]
+
+    # x-Achse: bei bekanntem Startzeitpunkt die ABSOLUTE Uhrzeit anzeigen (sonst Sekunden
+    # seit Start). Die verstrichene Zeit steht zusätzlich im Hover und in der Caption.
+    if dec.start is not None:
+        base_np = np.datetime64(dec.start)
+
+        def to_x(secs):
+            return base_np + np.round(np.asarray(secs, float) * 1000).astype("timedelta64[ms]")
+
+        x_axis_title = "Uhrzeit"
+        lead_cd = [elapsed_str(float(x)) for x in t]          # verstrichen je Punkt (Hover)
+        lead_h = "%{x|%H:%M:%S} Uhr · +%{customdata} · %{y:.3f} mV"
+    else:
+        def to_x(secs):
+            return np.asarray(secs, float)
+
+        x_axis_title = "Zeit [s seit Start]"
+        lead_cd = None
+        lead_h = "+%{x:.1f} s · %{y:.3f} mV"
+    lead_x = to_x(t)
 
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.045,
                         row_heights=[0.27, 0.27, 0.27, 0.19],
@@ -292,15 +341,17 @@ with tab_view:
                         + [""])                       # Puls-Reihe: bpm-Achse reicht als Beschriftung
     fig.update_annotations(font_size=12)              # "Ableitung X"-Titel dezenter
     for r, lbl in enumerate(h.LEAD_LABELS):
-        fig.add_trace(go.Scatter(x=t, y=dec.samples[i0:i1, r] * h.MV_PER_UNIT,
-                                 mode="lines", line=dict(color="black", width=1)),
+        fig.add_trace(go.Scatter(x=lead_x, y=dec.samples[i0b:i1b, r] * h.MV_PER_UNIT,
+                                 mode="lines", line=dict(color="black", width=1),
+                                 customdata=lead_cd,
+                                 hovertemplate=lead_h + f"<extra>Ableitung {lbl}</extra>"),
                       row=r + 1, col=1)
         fig.update_yaxes(title_text="mV", row=r + 1, col=1, zeroline=True,
                          gridcolor="rgba(255,0,0,0.2)")
     if len(beats):
-        fig.add_trace(go.Scatter(x=beats / fs, y=dec.samples[beats, 1] * h.MV_PER_UNIT,
+        fig.add_trace(go.Scatter(x=to_x(beats / fs), y=dec.samples[beats, 1] * h.MV_PER_UNIT,
                                  mode="markers", marker=dict(color="red", size=6),
-                                 name="QRS"), row=2, col=1)
+                                 name="QRS", hoverinfo="skip"), row=2, col=1)
 
     # Pulsverlauf: Momentan-Herzfrequenz (60/RR) an jedem Schlag im sichtbaren Fenster.
     bt = all_beats / fs
@@ -309,29 +360,46 @@ with tab_view:
         hr_t = bt[1:]
         hr_v = np.where(rr > 0, 60.0 / rr, np.nan)
         margin = win * 0.5                        # Randpunkte mitnehmen -> Linie bis zum Rand
-        sel = ((hr_t >= t[0] - margin) & (hr_t <= (t[-1] if len(t) else 0) + margin)
-               & (hr_v > 25) & (hr_v < 250))
+        lo_t = (t[0] if len(t) else 0.0) - margin
+        hi_t = (t[-1] if len(t) else 0.0) + margin
+        sel = (hr_t >= lo_t) & (hr_t <= hi_t) & (hr_v > 25) & (hr_v < 250)
         if np.any(sel):
-            fig.add_trace(go.Scatter(x=hr_t[sel], y=hr_v[sel], mode="lines+markers",
+            xs = hr_t[sel]
+            if dec.start is not None:             # verstrichene Zeit je Punkt für den Hover
+                cd = [elapsed_str(float(x)) for x in xs]
+                htmpl = "%{x|%H:%M:%S} Uhr · +%{customdata} · %{y:.0f} bpm<extra></extra>"
+            else:
+                cd = None
+                htmpl = "+%{x:.1f} s · %{y:.0f} bpm<extra></extra>"
+            fig.add_trace(go.Scatter(x=to_x(xs), y=hr_v[sel], mode="lines+markers",
                                      line=dict(color="crimson", width=1.5),
                                      marker=dict(size=5, color="crimson"),
-                                     name="Puls",
-                                     hovertemplate="%{x:.1f} s · %{y:.0f} bpm<extra></extra>"),
+                                     name="Puls", customdata=cd,
+                                     hovertemplate=htmpl),
                           row=4, col=1)
     fig.update_yaxes(title_text="bpm", row=4, col=1, gridcolor="rgba(255,0,0,0.2)")
-    fig.update_xaxes(title_text="Zeit [s]", row=4, col=1, gridcolor="rgba(255,0,0,0.2)")
-    if len(t):                                     # x-Bereich exakt aufs Fenster begrenzen
-        fig.update_xaxes(range=[t[0], t[-1]])
+    fig.update_xaxes(title_text=x_axis_title, row=4, col=1, gridcolor="rgba(255,0,0,0.2)")
+    # Sichtbar zunächst nur das Fenster; der geladene Puffer wird per „Pan“ erreichbar.
+    win_end = min(ss.view_start + win, dec.duration_s)
+    rng = to_x([ss.view_start, win_end])
+    fig.update_xaxes(range=([str(s) for s in np.datetime_as_string(rng)] if dec.start is not None
+                            else [float(rng[0]), float(rng[1])]))
     fig.update_layout(height=780, showlegend=False, margin=dict(l=50, r=20, t=40, b=40))
     st.plotly_chart(fig, width="stretch")
 
     # ---- Navigator: Puls der GANZEN Aufnahme, klickbar (EKG bleibt oben voll aufgelöst) ----
     tc, hrtr = ana["trend"]                        # 30-s-Mittel, günstig für die Übersicht
     if len(tc):
+        if dec.start is not None:                  # absolute Uhrzeit je Punkt für den Hover
+            nav_cd = [abs_clock(dec, float(s)) for s in tc]
+            nav_h = "+%{x:.1f} min · %{customdata} Uhr · %{y:.0f} bpm<extra></extra>"
+        else:
+            nav_cd = None
+            nav_h = "+%{x:.1f} min · %{y:.0f} bpm<extra></extra>"
         nav = go.Figure(go.Scatter(
             x=tc / 60.0, y=hrtr, mode="lines+markers",
             line=dict(color="crimson", width=1), marker=dict(size=3, color="crimson"),
-            name="Puls", hovertemplate="%{x:.1f} min · %{y:.0f} bpm<extra></extra>"))
+            name="Puls", customdata=nav_cd, hovertemplate=nav_h))
         nav.add_vrect(x0=ss.view_start / 60.0, x1=(ss.view_start + win) / 60.0,
                       fillcolor="steelblue", opacity=0.25, line_width=0)
 
@@ -353,8 +421,10 @@ with tab_view:
 
             ex = np.array([e["zeit_s"] for e in ev], dtype=float) / 60.0
             colors = ["#9aa0a6" if e.get("unsicher") else "#ff7f0e" for e in ev]
-            cd = [[e["nr"], e["typ"]] for e in ev]
+            cd = [[e["nr"], e["typ"], abs_clock(dec, e["zeit_s"])] for e in ev]
             show_text = len(ev) <= 40              # bei sehr vielen nur Punkte (sonst Textsalat)
+            ev_time = ("%{x:.1f} min · %{customdata[2]} Uhr" if dec.start
+                       else "+%{x:.1f} min")
             nav.add_trace(go.Scatter(     # 2) nummerierte Punkte oben (klickbar -> EKG springt hin)
                 x=ex, y=np.full(len(ev), top), mode="markers+text" if show_text else "markers",
                 text=[str(e["nr"]) for e in ev] if show_text else None,
@@ -363,7 +433,7 @@ with tab_view:
                             line=dict(color="black", width=0.6)),
                 customdata=cd, name="Auffälligkeit",
                 hovertemplate="Nr. %{customdata[0]}: %{customdata[1]}<br>"
-                              "%{x:.1f} min<extra></extra>"))
+                              + ev_time + "<extra></extra>"))
             nav.update_yaxes(range=[ymin - span * 0.12, top + span * 0.22])
 
         nav.update_layout(
@@ -371,7 +441,7 @@ with tab_view:
             title=dict(text="Puls – ganze Aufnahme (Punkt/Nummer anklicken → EKG springt dorthin; "
                             "orange = Auffälligkeit, blau = aktuelles Fenster)",
                        font=dict(size=13)),
-            xaxis_title="Zeit [min]", yaxis_title="bpm",
+            xaxis_title="Zeit [min seit Start]", yaxis_title="bpm",
             showlegend=False, clickmode="event+select")
         st.plotly_chart(nav, key="nav", on_select="rerun", selection_mode="points")
     else:
@@ -383,9 +453,19 @@ with tab_ana:
     tc, hr = ana["trend"]
     if len(tc):
         base_dt = dec.start
-        x = [base_dt + timedelta(seconds=float(s)) for s in tc] if base_dt else tc
-        f = go.Figure(go.Scatter(x=x, y=hr, mode="lines", line=dict(color="crimson")))
-        f.update_layout(height=300, yaxis_title="bpm", margin=dict(l=40, r=20, t=10, b=30))
+        rel_txt = [elapsed_str(float(s)) for s in tc]     # verstrichen seit Start je Punkt
+        if base_dt:
+            x = [base_dt + timedelta(seconds=float(s)) for s in tc]
+            htmpl = "%{x|%d.%m %H:%M:%S} Uhr · +%{customdata} · %{y:.0f} bpm<extra></extra>"
+            xtitle = "Uhrzeit"
+        else:
+            x = tc
+            htmpl = "+%{customdata} · %{y:.0f} bpm<extra></extra>"
+            xtitle = "Zeit [s seit Start]"
+        f = go.Figure(go.Scatter(x=x, y=hr, mode="lines", line=dict(color="crimson"),
+                                 customdata=rel_txt, hovertemplate=htmpl))
+        f.update_layout(height=300, yaxis_title="bpm", xaxis_title=xtitle,
+                        margin=dict(l=40, r=20, t=10, b=30))
         st.plotly_chart(f, width="stretch")
 
     st.subheader("HRV-Kennzahlen (technisch)")
@@ -472,7 +552,8 @@ with tab_ana:
     st.subheader("Statistik je Stunde")
     hs = ana["hourly"]
     if hs:
-        st.dataframe([{"Uhrzeit": r["uhrzeit"], "Ø HF": f"{r['hf_mittel']:.0f}",
+        st.dataframe([{"Nach Start": f"+{elapsed_str(r['nach_s'])}",
+                       "Uhrzeit": r["uhrzeit"], "Ø HF": f"{r['hf_mittel']:.0f}",
                        "min": f"{r['hf_min']:.0f}", "max": f"{r['hf_max']:.0f}",
                        "Schläge": r["schlaege"]} for r in hs],
                      width="stretch", hide_index=True)

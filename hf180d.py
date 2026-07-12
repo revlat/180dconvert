@@ -958,6 +958,7 @@ def hourly_stats(dec: DecodedRecord) -> list[dict]:
         vals = hr[sel]
         rows.append({
             "uhrzeit": (start + timedelta(seconds=lo)).strftime("%d.%m %H:%M"),
+            "nach_s": lo,          # Sekunden seit Aufnahmebeginn (für relative Anzeige)
             "hf_mittel": float(np.mean(vals)),
             "hf_min": float(np.min(vals)),
             "hf_max": float(np.max(vals)),
