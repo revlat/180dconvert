@@ -204,24 +204,36 @@ def export_csv(dec: DecodedRecord, out_path: str) -> None:
                fmt=["%.4f", "%.3f", "%.3f", "%.3f", "%d"])
 
 
-def export_edf(dec: DecodedRecord, out_path: str, dev: DeviceInfo) -> None:
+def _build_edf(samples: np.ndarray, start: datetime | None, dev: DeviceInfo):
+    """Baut ein Edf-Objekt aus einem (N,3)-Sample-Block (Einheit 0,01 mV).
+
+    Verlustfrei zur Geräteauflösung: EDF+ nutzt 16-Bit-Digitalwerte über den
+    physikalischen Bereich des Blocks – bei wenigen mV feiner als die 0,01-mV-Rasterung.
+    """
     from edfio import Edf, EdfSignal, Patient, Recording
+    fs_i = int(SAMPLING_RATE)
+    n = samples.shape[0]
+    whole = n - (n % fs_i)                          # EDF-Datensätze = ganze Sekunden
+    if whole >= fs_i:
+        samples = samples[:whole]
     signals = []
     for i, label in enumerate(LEAD_LABELS):
-        sig = dec.samples[:, i].astype(np.float64) * MV_PER_UNIT
+        sig = samples[:, i].astype(np.float64) * MV_PER_UNIT
         pmin, pmax = float(sig.min()), float(sig.max())
         if pmax <= pmin:
             pmax = pmin + 1.0
         signals.append(EdfSignal(sig, sampling_frequency=SAMPLING_RATE,
                                  label=f"ECG {label}", physical_dimension="mV",
                                  physical_range=(pmin, pmax)))
-    start = dec.start
     equipment = f"{dev.model}_SN{dev.serial}".strip().replace(" ", "_") or "X"
-    edf = Edf(signals=signals, patient=Patient(code="X"),
-              recording=Recording(startdate=start.date() if start else None,
-                                   equipment_code=equipment),
-              starttime=start.time() if start else None)
-    edf.write(out_path)
+    return Edf(signals=signals, patient=Patient(code="X"),
+               recording=Recording(startdate=start.date() if start else None,
+                                    equipment_code=equipment),
+               starttime=start.time() if start else None)
+
+
+def export_edf(dec: DecodedRecord, out_path: str, dev: DeviceInfo) -> None:
+    _build_edf(dec.samples, dec.start, dev).write(out_path)
 
 
 def export_plot(dec: DecodedRecord, out_path: str, seconds: float = 10.0,
@@ -671,13 +683,12 @@ def csv_bytes(dec: DecodedRecord) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def edf_bytes(dec: DecodedRecord, dev: DeviceInfo) -> bytes:
-    """EDF+ als Bytes (für Direkt-Download im Browser)."""
+def _edf_to_bytes(edf) -> bytes:
     import tempfile
     fd, tmp = tempfile.mkstemp(suffix=".edf")
     os.close(fd)
     try:
-        export_edf(dec, tmp, dev)
+        edf.write(tmp)
         with open(tmp, "rb") as f:
             return f.read()
     finally:
@@ -685,6 +696,31 @@ def edf_bytes(dec: DecodedRecord, dev: DeviceInfo) -> bytes:
             os.remove(tmp)
         except OSError:
             pass
+
+
+def edf_bytes(dec: DecodedRecord, dev: DeviceInfo) -> bytes:
+    """EDF+ der ganzen Aufnahme als Bytes (für Direkt-Download im Browser)."""
+    return _edf_to_bytes(_build_edf(dec.samples, dec.start, dev))
+
+
+def edf_segment_bytes(dec: DecodedRecord, dev: DeviceInfo,
+                      i0: int, i1: int) -> bytes:
+    """EDF+ nur für den Ausschnitt [i0:i1] (Sample-Indizes) als Bytes.
+
+    Startzeitstempel = Aufnahmestart + i0/fs. Verlustfrei zur Geräteauflösung.
+    Die Länge wird auf ganze Sekunden gekürzt (EDF-Datensätze), damit gängige
+    Viewer (EDFbrowser) sie sauber öffnen.
+    """
+    i0 = max(0, int(i0))
+    i1 = min(dec.n_samples, int(i1))
+    n = i1 - i0
+    whole = n - (n % int(SAMPLING_RATE))          # auf volle Sekunden runden
+    if whole >= int(SAMPLING_RATE):
+        i1 = i0 + whole
+    if i1 <= i0:
+        raise ValueError("Leerer oder zu kurzer Ausschnitt für den EDF-Export.")
+    start = (dec.start + timedelta(seconds=i0 / SAMPLING_RATE)) if dec.start else None
+    return _edf_to_bytes(_build_edf(dec.samples[i0:i1], start, dev))
 
 
 def build_report_pdf(dec: DecodedRecord, dev: DeviceInfo,

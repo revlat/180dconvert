@@ -127,7 +127,7 @@ c[1].metric("Ø Herzfrequenz", f"{ana['hrv'].get('mean_hr', float('nan')):.0f} b
 c[2].metric("HF min / max", f"{ana['hrv'].get('min_hr', 0):.0f} / {ana['hrv'].get('max_hr', 0):.0f}")
 c[3].metric("Auffälligkeiten", f"{len(ana['events'])}")
 
-tab_view, tab_ana, tab_export = st.tabs(["📈 EKG ansehen", "🔬 Analyse", "💾 Export"])
+tab_view, tab_ana, tab_export = st.tabs(["📈 EKG ansehen", "🔬 Analyse", "💾 Export (alles)"])
 
 # =========================================================================== #
 with tab_view:
@@ -144,7 +144,7 @@ with tab_view:
 
     left, right = st.columns([3, 2])
     with right:
-        win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60], value=10,
+        win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60, 120], value=10,
                                format_func=lambda s: f"{s} s")
         max_min = max(0.0, (dec.duration_s - win) / 60.0)
 
@@ -193,6 +193,28 @@ with tab_view:
         st.caption(f"Zeigt **{clock(dec, ss.view_start)}** … "
                    f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec)")
 
+        # Teil-Export: genau der unten gezeigte Ausschnitt als EDF+ (verlustfrei)
+        i0 = int(ss.view_start * fs)
+        i1 = min(dec.n_samples, i0 + int(win * fs))
+        seg_id = (idx, i0, i1)
+        if st.button(f"🧩 Ausschnitt ({win} s) als EDF+ vorbereiten", key="prep_seg"):
+            try:
+                ss["seg_edf"] = {"id": seg_id, "bytes": h.edf_segment_bytes(dec, dev, i0, i1)}
+            except Exception as ex:                    # z. B. edfio fehlt / zu kurz
+                ss["seg_edf"] = {"id": seg_id, "error": str(ex)}
+        seg = ss.get("seg_edf")
+        if seg and seg.get("id") == seg_id and seg.get("bytes"):
+            fn = f"record{idx}_{int(round(ss.view_start))}-{int(round(ss.view_start + win))}s.edf"
+            st.download_button("⬇️ Ausschnitt als EDF+ laden", seg["bytes"], file_name=fn,
+                               mime="application/octet-stream", key="dl_seg")
+            st.caption(f"{clock(dec, ss.view_start)} … {clock(dec, ss.view_start + win)} "
+                       "– verlustfrei, Startzeit auf den Ausschnitt gesetzt.")
+        elif seg and seg.get("id") == seg_id and seg.get("error"):
+            st.error(f"Export nicht möglich: {seg['error']}")
+        else:
+            st.caption("Exportiert genau den unten sichtbaren Bereich (nach dem Verschieben "
+                       "erneut „vorbereiten“).")
+
     if picked_event is not None:
         e = picked_event
         dauer = f"  ·  Dauer {e['dauer_s']:.0f} s" if e.get("dauer_s") else ""
@@ -201,8 +223,6 @@ with tab_view:
         (st.warning if e.get("unsicher") else st.info)(box)
 
     # ---- Haupt-EKG: aktuelles Fenster in VOLLER Auflösung + Puls des Fensters ----
-    i0 = int(ss.view_start * fs)
-    i1 = min(dec.n_samples, i0 + int(win * fs))
     t = np.arange(i0, i1) / fs
 
     # Schlagquelle (NeuroKit-R-Zacken bevorzugt, sonst Geräte-Marker) – global,
