@@ -193,9 +193,20 @@ with tab_view:
                 ss.start_min = float(min(max(0.0, nav_x - (win / 3) / 60.0), max_min))
 
         if labels:
-            box_w = min(520, 60 + max(len(l) for l in labels) * 7)
-            st.selectbox("Zu Auffälligkeit (Nr.) springen", ["—"] + labels,
-                         key="event_pick", width=box_w)
+            options = ["—"] + labels
+
+            def _step_event(delta, opts):      # Callback: läuft VOR dem Rerun -> disabled stimmt sofort
+                cur = opts.index(ss.event_pick) if ss.event_pick in opts else 0
+                ss.event_pick = opts[max(0, min(cur + delta, len(opts) - 1))]
+
+            cur_opt = options.index(ss.event_pick) if ss.event_pick in options else 0
+            row = st.columns([6, 1, 1], vertical_alignment="bottom")
+            row[0].selectbox("Zu Auffälligkeit (Nr.) springen", options,
+                             key="event_pick", width="stretch")
+            row[1].button("‹", key="ev_prev", disabled=(cur_opt <= 0),
+                          width="stretch", on_click=_step_event, args=(-1, options))
+            row[2].button("›", key="ev_next", disabled=(cur_opt >= len(options) - 1),
+                          width="stretch", on_click=_step_event, args=(1, options))
 
     pick = ss.event_pick if labels else "—"
     picked_event = event_by_label.get(pick)
@@ -377,6 +388,34 @@ with tab_ana:
         cc[1].metric("SDNN", f"{m['sdnn_ms']:.0f} ms")
         cc[2].metric("RMSSD", f"{m['rmssd_ms']:.0f} ms")
         cc[3].metric("pNN50", f"{m['pnn50_pct']:.1f} %")
+
+    st.subheader("HRV-Grafiken (technisch)")
+    _, rr_all = h.rr_series(dec)
+    rr_ms = rr_all * 1000.0
+    if len(rr_ms) > 3:
+        gx, gy = rr_ms[:-1], rr_ms[1:]                    # aufeinanderfolgende RR-Paare
+        pm = (gx > 300) & (gx < 2000) & (gy > 300) & (gy < 2000)   # nur physiologische Paare
+        rr_ok = rr_ms[(rr_ms > 300) & (rr_ms < 2000)]
+        g1, g2 = st.columns(2)
+        pc = go.Figure(go.Scattergl(x=gx[pm], y=gy[pm], mode="markers",
+                                    marker=dict(size=3, color="purple", opacity=0.35)))
+        if np.any(pm):
+            lo, hi = float(gx[pm].min()), float(gx[pm].max())
+            pc.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines",
+                                    line=dict(color="gray", dash="dot", width=1)))
+        pc.update_layout(height=340, showlegend=False, title="Poincaré (RRₙ ↔ RRₙ₊₁)",
+                         xaxis_title="RRₙ [ms]", yaxis_title="RRₙ₊₁ [ms]",
+                         margin=dict(l=55, r=20, t=40, b=45))
+        g1.plotly_chart(pc, width="stretch")
+        hh = go.Figure(go.Histogram(x=rr_ok, nbinsx=50, marker_color="teal"))
+        hh.update_layout(height=340, showlegend=False, title="RR-Intervalle (Verteilung)",
+                         xaxis_title="RR [ms]", yaxis_title="Anzahl",
+                         margin=dict(l=55, r=20, t=40, b=45))
+        g2.plotly_chart(hh, width="stretch")
+        st.caption("Poincaré: Schlag-zu-Schlag-Streuung (Breite ≈ SD1, Länge ≈ SD2). "
+                   "Histogramm: Verteilung der Schlagabstände. Technisch, keine Diagnose.")
+    else:
+        st.info("Zu wenige Schläge für HRV-Grafiken.")
 
     st.subheader("Erweiterte Analyse (NeuroKit2)")
     nk = ana.get("nk")
