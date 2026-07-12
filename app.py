@@ -46,6 +46,13 @@ st.markdown("""
     break-inside: avoid; page-break-inside: avoid; }
   @page { margin: 12mm; }
 }
+/* Bildschirm: Standard-Padding oben (6rem) ist zu viel Leerraum */
+[data-testid="stMainBlockContainer"], .stMainBlockContainer, .block-container {
+  padding-top: 1rem !important; }
+/* Sidebar-Einklapp-Pfeil immer zeigen (Standard: nur bei Hover) */
+[data-testid="stSidebarCollapseButton"] {
+  display: block !important; visibility: visible !important; opacity: 1 !important; }
+[data-testid="stSidebarCollapseButton"] button { visibility: visible !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -167,7 +174,7 @@ with tab_view:
 
     left, right = st.columns([3, 2])
     with right:
-        win = st.select_slider("Fensterbreite", [5, 10, 20, 30, 60, 120], value=10,
+        win = st.select_slider("Fensterbreite", list(range(5, 125, 5)), value=10,
                                format_func=lambda s: f"{s} s")
         max_min = max(0.0, (dec.duration_s - win) / 60.0)
 
@@ -282,7 +289,8 @@ with tab_view:
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.045,
                         row_heights=[0.27, 0.27, 0.27, 0.19],
                         subplot_titles=[f"Ableitung {l}" for l in h.LEAD_LABELS]
-                        + ["Puls (bpm)"])
+                        + [""])                       # Puls-Reihe: bpm-Achse reicht als Beschriftung
+    fig.update_annotations(font_size=12)              # "Ableitung X"-Titel dezenter
     for r, lbl in enumerate(h.LEAD_LABELS):
         fig.add_trace(go.Scatter(x=t, y=dec.samples[i0:i1, r] * h.MV_PER_UNIT,
                                  mode="lines", line=dict(color="black", width=1)),
