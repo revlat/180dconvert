@@ -426,8 +426,11 @@ def neurokit_analysis(dec: DecodedRecord) -> dict | None:
                 sd1 = float(np.std(np.diff(rr), ddof=1) / np.sqrt(2) * 1000)
                 sd2 = float(np.sqrt(max(0.0, 2 * np.var(rr, ddof=1)
                                        - 0.5 * np.var(np.diff(rr), ddof=1))) * 1000)
-            out["hrv"] = {"MeanNN": _g(ht, "MeanNN"), "SDNN": _g(ht, "SDNN"),
-                          "RMSSD": _g(ht, "RMSSD"), "pNN50": _g(ht, "pNN50"),
+            out["hrv"] = {"MeanNN": _g(ht, "MeanNN"), "MedianNN": _g(ht, "MedianNN"),
+                          "SDNN": _g(ht, "SDNN"), "SDANN": _g(ht, "SDANN1"),
+                          "SDNNI": _g(ht, "SDNNI1"), "RMSSD": _g(ht, "RMSSD"),
+                          "pNN50": _g(ht, "pNN50"), "pNN20": _g(ht, "pNN20"),
+                          "HTI": _g(ht, "HTI"),
                           "SD1": sd1, "SD2": sd2, "LFHF": _g(hfd, "LFHF")}
         except Exception:
             out["hrv"] = {}

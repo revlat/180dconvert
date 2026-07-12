@@ -434,15 +434,21 @@ with tab_ana:
             qcols[1].metric("Signalqualität Ø", f"{nk['quality_mean']:.2f}")
             qcols[2].metric("niedrige Qualität", f"{nk.get('quality_low_pct', 0):.0f} %")
         hv = nk.get("hrv", {})
-        order = [("MeanNN", "ms"), ("SDNN", "ms"), ("RMSSD", "ms"), ("pNN50", "%"),
-                 ("SD1", "ms"), ("SD2", "ms"), ("LFHF", "")]
+        # (Schlüssel, Anzeigename, Einheit); SDANN/SDNNI/HTI brauchen längere Aufnahmen.
+        order = [("MeanNN", "MeanNN", "ms"), ("MedianNN", "MedianNN", "ms"),
+                 ("SDNN", "SDNN", "ms"), ("SDANN", "SDANN", "ms"), ("SDNNI", "SDNNI", "ms"),
+                 ("RMSSD", "RMSSD", "ms"), ("pNN50", "pNN50", "%"), ("pNN20", "pNN20", "%"),
+                 ("HTI", "HTI (Dreiecksindex)", ""),
+                 ("SD1", "SD1", "ms"), ("SD2", "SD2", "ms"), ("LFHF", "LF/HF", "")]
         st.dataframe(
-            [{"Kennzahl": ("LF/HF" if k == "LFHF" else k),
+            [{"Kennzahl": name,
               "Wert": (f"{hv[k]:.1f} {u}".strip() if isinstance(hv.get(k), (int, float)) else "–")}
-             for k, u in order],
+             for k, name, u in order],
             hide_index=True, width="stretch")
         st.caption("Robuste R-Zacken-Erkennung, Signalqualität und erweiterte HRV "
-                   "(inkl. Frequenz-/Poincaré-Maße) via NeuroKit2 – technisch, keine Diagnose.")
+                   "(Zeit-/Frequenz-/Poincaré-Maße) via NeuroKit2 – technisch, keine Diagnose. "
+                   "SDANN, SDNNI und HTI sind für längere Aufnahmen gedacht und bleiben bei "
+                   "kurzen Aufzeichnungen leer („–“).")
     else:
         st.info("**NeuroKit2 ist nicht installiert** – es läuft die numpy-Basisanalyse. "
                 "Für die erweiterte Analyse (robustere R-Zacken, Signalqualität, reichere HRV): "

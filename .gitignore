@@ -22,3 +22,6 @@ ECG_*/
 .vscode/
 .idea/
 .DS_Store
+
+# Lokale Notizen (nicht committen)
+docs/erkennung-roadmap.md
