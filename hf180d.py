@@ -723,6 +723,87 @@ def edf_segment_bytes(dec: DecodedRecord, dev: DeviceInfo,
     return _edf_to_bytes(_build_edf(dec.samples[i0:i1], start, dev))
 
 
+def view_pdf_bytes(dec: DecodedRecord, dev: DeviceInfo, i0: int, i1: int,
+                   nk: dict | None = None) -> bytes:
+    """Der aktuell gezeigte EKG-Ausschnitt [i0:i1] als druckfertiges PDF (Bytes).
+
+    Zeichnet – wie im „EKG ansehen“-Tab – die drei Ableitungen plus Pulsverlauf neu
+    (matplotlib), damit der Ausdruck immer vollständig auf ein A4-Blatt (quer) passt.
+    ⚠️ Kein Medizinprodukt – technische Aufbereitung, keine Diagnose.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    fs = SAMPLING_RATE
+    i0 = max(0, int(i0))
+    i1 = min(dec.n_samples, int(i1))
+    if i1 <= i0:
+        raise ValueError("Leerer Ausschnitt.")
+    t = np.arange(i0, i1) / fs
+    mv = dec.samples[i0:i1].astype(float) * MV_PER_UNIT
+    dur = float(t[-1] - t[0]) if len(t) > 1 else 0.0
+
+    if nk and nk.get("rpeaks") is not None and len(np.asarray(nk["rpeaks"])):
+        all_beats = np.asarray(nk["rpeaks"])
+    else:
+        all_beats = np.flatnonzero(dec.qrs)
+    beats = all_beats[(all_beats >= i0) & (all_beats < i1)]
+
+    hr_t = hr_v = None                                  # Momentan-Puls (60/RR) im Fenster
+    bt = all_beats / fs
+    if len(bt) >= 2:
+        rr = np.diff(bt)
+        ht, hv = bt[1:], np.where(rr > 0, 60.0 / rr, np.nan)
+        m = (ht >= t[0]) & (ht <= t[-1]) & (hv > 25) & (hv < 250)
+        hr_t, hr_v = ht[m], hv[m]
+
+    # Rasterdichte an die Fensterlänge anpassen (EKG-Millimeterraster nur bei kurzen Fenstern)
+    if dur <= 30:
+        maj, minr = 0.2, 0.04
+    else:
+        maj = max(1.0, round(dur / 12.0))
+        minr = maj / 5.0
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig, axes = plt.subplots(4, 1, figsize=(11.69, 8.27), sharex=True,
+                                 gridspec_kw={"height_ratios": [3, 3, 3, 2]})
+        fig.suptitle(
+            f"Heal Force Prince 180D – Aufnahme {dec.record.index}   ·   "
+            f"{_clock(dec, float(t[0]))}   ·   {dur:.0f} s   (10 mm/mV, 25 mm/sec)",
+            fontsize=11)
+        for r, label in enumerate(LEAD_LABELS):
+            ax = axes[r]
+            ax.plot(t, mv[:, r], color="black", linewidth=0.7)
+            ax.set_ylabel(f"{label}\n[mV]", rotation=0, ha="right", va="center")
+            ax.xaxis.set_major_locator(plt.MultipleLocator(maj))
+            ax.xaxis.set_minor_locator(plt.MultipleLocator(minr))
+            ax.yaxis.set_major_locator(plt.MultipleLocator(0.5))
+            ax.yaxis.set_minor_locator(plt.MultipleLocator(0.1))
+            ax.grid(which="major", color="red", alpha=0.5, linewidth=0.6)
+            ax.grid(which="minor", color="red", alpha=0.2, linewidth=0.4)
+            ax.set_xlim(t[0], t[-1])
+        if len(beats):                                   # QRS-Marker auf Ableitung II
+            axes[1].plot(beats / fs, dec.samples[beats, 1].astype(float) * MV_PER_UNIT,
+                         "o", color="red", ms=3)
+        axp = axes[3]
+        if hr_t is not None and len(hr_t):
+            axp.plot(hr_t, hr_v, "-o", color="crimson", ms=3, linewidth=1.0)
+        axp.set_ylabel("Puls\n[bpm]", rotation=0, ha="right", va="center")
+        axp.grid(which="major", color="red", alpha=0.3, linewidth=0.5)
+        axp.xaxis.set_major_locator(plt.MultipleLocator(maj))
+        axp.set_xlim(t[0], t[-1])
+        axes[-1].set_xlabel("Zeit [s] seit Aufnahmestart")
+        fig.text(0.01, 0.01, "Kein Medizinprodukt – keine Diagnose, nur technische Aufbereitung.",
+                 fontsize=7, style="italic")
+        fig.tight_layout(rect=(0, 0.02, 1, 0.96))
+        pdf.savefig(fig)
+        plt.close(fig)
+    return buf.getvalue()
+
+
 def build_report_pdf(dec: DecodedRecord, dev: DeviceInfo,
                      brady=50.0, tachy=100.0, nk: dict | None = None) -> bytes:
     """Mehrseitiger technischer Bericht als PDF (Bytes). KEINE Diagnose."""

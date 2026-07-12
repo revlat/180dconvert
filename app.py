@@ -26,6 +26,29 @@ import hf180d as h
 
 st.set_page_config(page_title="180D EKG – Viewer & Analyse", layout="wide")
 
+# Druckansicht (Strg+P): Bedienelemente & Streamlit-Chrome ausblenden, volle Breite,
+# Farben mitdrucken, nicht mitten in Diagrammen/Tabellen umbrechen. Wirkt NUR beim Drucken.
+st.markdown("""
+<style>
+@media print {
+  [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stStatusWidget"],
+  [data-baseweb="tab-list"] { display: none !important; }
+  [data-testid="stSlider"], [data-testid="stSelectbox"], [data-testid="stSelectSlider"],
+  [data-testid="stButton"], [data-testid="stDownloadButton"], [data-testid="stToggle"],
+  [data-testid="stTextInput"], [data-testid="stFileUploader"] { display: none !important; }
+  [data-testid="stAppViewContainer"], [data-testid="stMain"], .block-container {
+    max-width: 100% !important; width: 100% !important; padding: 0.4rem !important; }
+  html, body { background: #fff !important; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  [data-testid="stPlotlyChart"], [data-testid="stDataFrame"], [data-testid="stTable"],
+  [data-testid="stMetric"], [data-testid="stAlert"], .stAlert {
+    break-inside: avoid; page-break-inside: avoid; }
+  @page { margin: 12mm; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 ss = st.session_state
 ss.setdefault("records", {})      # index -> DecodedRecord
 ss.setdefault("analysis", {})     # index -> dict
@@ -193,27 +216,38 @@ with tab_view:
         st.caption(f"Zeigt **{clock(dec, ss.view_start)}** … "
                    f"{clock(dec, ss.view_start + win)}  (10 mm/mV, 25 mm/sec)")
 
-        # Teil-Export: genau der unten gezeigte Ausschnitt als EDF+ (verlustfrei)
+        # Export des aktuell gezeigten Ausschnitts: EDF+ und druckfertiges PDF nebeneinander
         i0 = int(ss.view_start * fs)
         i1 = min(dec.n_samples, i0 + int(win * fs))
         seg_id = (idx, i0, i1)
-        if st.button(f"🧩 Ausschnitt ({win} s) als EDF+ vorbereiten", key="prep_seg"):
-            try:
-                ss["seg_edf"] = {"id": seg_id, "bytes": h.edf_segment_bytes(dec, dev, i0, i1)}
-            except Exception as ex:                    # z. B. edfio fehlt / zu kurz
-                ss["seg_edf"] = {"id": seg_id, "error": str(ex)}
-        seg = ss.get("seg_edf")
-        if seg and seg.get("id") == seg_id and seg.get("bytes"):
-            fn = f"record{idx}_{int(round(ss.view_start))}-{int(round(ss.view_start + win))}s.edf"
-            st.download_button("⬇️ Ausschnitt als EDF+ laden", seg["bytes"], file_name=fn,
-                               mime="application/octet-stream", key="dl_seg")
-            st.caption(f"{clock(dec, ss.view_start)} … {clock(dec, ss.view_start + win)} "
-                       "– verlustfrei, Startzeit auf den Ausschnitt gesetzt.")
-        elif seg and seg.get("id") == seg_id and seg.get("error"):
-            st.error(f"Export nicht möglich: {seg['error']}")
-        else:
-            st.caption("Exportiert genau den unten sichtbaren Bereich (nach dem Verschieben "
-                       "erneut „vorbereiten“).")
+        bcol = st.columns(2)
+        with bcol[0]:                                  # EDF+ des Ausschnitts (verlustfrei)
+            if st.button(f"🧩 Ausschnitt ({win} s) als EDF+", key="prep_seg"):
+                try:
+                    ss["seg_edf"] = {"id": seg_id, "bytes": h.edf_segment_bytes(dec, dev, i0, i1)}
+                except Exception as ex:                # z. B. edfio fehlt / zu kurz
+                    ss["seg_edf"] = {"id": seg_id, "error": str(ex)}
+            seg = ss.get("seg_edf")
+            if seg and seg.get("id") == seg_id and seg.get("bytes"):
+                fn = f"record{idx}_{int(round(ss.view_start))}-{int(round(ss.view_start + win))}s.edf"
+                st.download_button("⬇️ EDF+ laden", seg["bytes"], file_name=fn,
+                                   mime="application/octet-stream", key="dl_seg")
+            elif seg and seg.get("id") == seg_id and seg.get("error"):
+                st.error(f"EDF+ nicht möglich: {seg['error']}")
+        with bcol[1]:                                  # druckfertiges PDF genau dieser Ansicht
+            if st.button("🖨️ Ansicht als PDF", key="prep_viewpdf"):
+                try:
+                    ss["view_pdf"] = {"id": seg_id,
+                                      "bytes": h.view_pdf_bytes(dec, dev, i0, i1, nk=ana.get("nk"))}
+                except Exception as ex:
+                    ss["view_pdf"] = {"id": seg_id, "error": str(ex)}
+            vp = ss.get("view_pdf")
+            if vp and vp.get("id") == seg_id and vp.get("bytes"):
+                fnp = f"ansicht_record{idx}_{int(round(ss.view_start))}-{int(round(ss.view_start + win))}s.pdf"
+                st.download_button("⬇️ PDF laden", vp["bytes"], file_name=fnp,
+                                   mime="application/pdf", key="dl_viewpdf")
+            elif vp and vp.get("id") == seg_id and vp.get("error"):
+                st.error(f"PDF nicht möglich: {vp['error']}")
 
     if picked_event is not None:
         e = picked_event
